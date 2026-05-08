@@ -52,9 +52,15 @@ function getDb(): DatabaseSync {
 
   _db.exec("CREATE INDEX IF NOT EXISTS idx_runs_mode ON runs(mode)");
   _db.exec("CREATE INDEX IF NOT EXISTS idx_runs_code_hash ON runs(code_hash)");
-  _db.exec("CREATE INDEX IF NOT EXISTS idx_runs_schema_hash ON runs(schema_hash)");
-  _db.exec("CREATE INDEX IF NOT EXISTS idx_runs_started_at ON runs(started_at)");
-  _db.exec("CREATE INDEX IF NOT EXISTS idx_runs_project_path ON runs(project_path)");
+  _db.exec(
+    "CREATE INDEX IF NOT EXISTS idx_runs_schema_hash ON runs(schema_hash)",
+  );
+  _db.exec(
+    "CREATE INDEX IF NOT EXISTS idx_runs_started_at ON runs(started_at)",
+  );
+  _db.exec(
+    "CREATE INDEX IF NOT EXISTS idx_runs_project_path ON runs(project_path)",
+  );
 
   return _db;
 }

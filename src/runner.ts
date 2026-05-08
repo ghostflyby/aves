@@ -1,11 +1,11 @@
 import type { ServerPolicy } from "./policy.ts";
 import { resolvePermissions } from "./policy.ts";
-import type { Permissions, RunRecord, RunRequest, SkillManifest } from "./types.ts";
+import type { Permissions, RunRecord, RunRequest } from "./types.ts";
 import {
+  approveSkill,
+  hashManifest,
   loadSkillManifest,
   resolveSkillEntrypoint,
-  hashManifest,
-  approveSkill,
 } from "./skill.ts";
 
 const BOOT_PATH = new URL("./boot.ts", import.meta.url).pathname;
@@ -329,7 +329,10 @@ export async function executeSkillRun(
     }
   }
 
-  const { granted, denied } = resolvePermissions(effectivePerms, options?.policy);
+  const { granted, denied } = resolvePermissions(
+    effectivePerms,
+    options?.policy,
+  );
   const entrypoint = resolveSkillEntrypoint(skillDir, manifest);
 
   const record = await runModuleInSandbox(

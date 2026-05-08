@@ -78,7 +78,6 @@ export function getAvesConfigDir(): string {
   return `${Deno.env.get("HOME") ?? "/tmp"}/.config/aves`;
 }
 
-
 /**
  * Aves state directory.
  * Used for session-level runtime state: server registry, locks.
@@ -103,6 +102,5 @@ export function getAvesStateDir(): string {
   }
 
   // macOS, Windows, and others: use data dir
-  return path.join(getAvesDataDir(),"state");
-
+  return path.join(getAvesDataDir(), "state");
 }

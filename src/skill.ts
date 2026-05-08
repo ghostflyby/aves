@@ -1,11 +1,11 @@
 import { SkillManifestSchema } from "./schemas.ts";
-import type { Permissions, RunRecord, SkillManifest } from "./types.ts";
+import type { RunRecord, SkillManifest } from "./types.ts";
 import { resolvePermissions } from "./policy.ts";
-import { saveRun, saveSkillApproval, loadSkillApproval } from "./run-store.ts";
+import { loadSkillApproval, saveRun, saveSkillApproval } from "./run-store.ts";
 import {
-  getWritableSkillRoot,
-  getSkillRoots,
   ensureSkillRoots,
+  getSkillRoots,
+  getWritableSkillRoot,
 } from "./config.ts";
 
 // ============================================================
@@ -23,7 +23,8 @@ export function validateManifest(
     return {
       ok: false,
       error: `Invalid skill manifest: ${
-        result.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`)
+        result.error.issues
+          .map((i) => `${i.path.join(".")}: ${i.message}`)
           .join("; ")
       }`,
     };
@@ -34,17 +35,20 @@ export function validateManifest(
 /**
  * Compute an SHA-256 hash of the manifest using stable JSON serialization.
  */
-export async function hashManifest(
-  manifest: SkillManifest,
-): Promise<string> {
+export async function hashManifest(manifest: SkillManifest): Promise<string> {
   function stableStringify(val: unknown): string {
     if (val === null) return "null";
     if (typeof val !== "object" || Array.isArray(val)) {
       return JSON.stringify(val);
     }
     const keys = Object.keys(val as Record<string, unknown>).sort();
-    const pairs = keys.map((k) =>
-      `${JSON.stringify(k)}:${stableStringify((val as Record<string, unknown>)[k])}`
+    const pairs = keys.map(
+      (k) =>
+        `${JSON.stringify(k)}:${
+          stableStringify(
+            (val as Record<string, unknown>)[k],
+          )
+        }`,
     );
     return `{${pairs.join(",")}}`;
   }
@@ -52,9 +56,9 @@ export async function hashManifest(
   const enc = new TextEncoder();
   const data = enc.encode(canonical);
   const hash = await crypto.subtle.digest("SHA-256", data);
-  return Array.from(new Uint8Array(hash)).map((b) =>
-    b.toString(16).padStart(2, "0")
-  ).join("");
+  return Array.from(new Uint8Array(hash))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 // ============================================================
@@ -66,7 +70,9 @@ export async function hashManifest(
  */
 export async function loadSkillManifest(
   skillDir: string,
-): Promise<{ ok: true; manifest: SkillManifest } | { ok: false; error: string }> {
+): Promise<
+  { ok: true; manifest: SkillManifest } | { ok: false; error: string }
+> {
   try {
     const raw = await Deno.readTextFile(`${skillDir}/skill.json`);
     const parsed = JSON.parse(raw);
@@ -146,10 +152,7 @@ export async function promoteRunToSkill(
     entrypointContent?: string;
     skipIfExists?: boolean;
   },
-): Promise<
-  { ok: true; skillDir: string }
-  | { ok: false; error: string }
-> {
+): Promise<{ ok: true; skillDir: string } | { ok: false; error: string }> {
   if (!name.match(/^[a-z][a-z0-9_-]*$/)) {
     return {
       ok: false,
@@ -169,7 +172,11 @@ export async function promoteRunToSkill(
   if (denied.length > 0) {
     return {
       ok: false,
-      error: `Cannot promote: permissions were denied for: ${denied.join(", ")}`,
+      error: `Cannot promote: permissions were denied for: ${
+        denied.join(
+          ", ",
+        )
+      }`,
     };
   }
 
@@ -210,7 +217,8 @@ export async function promoteRunToSkill(
     JSON.stringify(manifest, null, 2),
   );
 
-  const entrypointContent = options?.entrypointContent ?? `
+  const entrypointContent = options?.entrypointContent ??
+    `
 // Skill: ${name}
 // Description: ${description}
 

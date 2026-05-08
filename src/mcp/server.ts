@@ -9,17 +9,14 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { executeRun, executeSkillRun } from "../runner.ts";
-import { listRuns, loadRun, saveRun, findClusteredRuns } from "../run-store.ts";
+import { findClusteredRuns, listRuns, loadRun, saveRun } from "../run-store.ts";
 import { RunRequestSchema } from "../schemas.ts";
+import { listSkills, promoteRunToSkill } from "../skill.ts";
 import {
-  promoteRunToSkill,
-  listSkills,
-} from "../skill.ts";
-import {
+  PromoteToSkillInputSchema,
   ReplayRunInputSchema,
   RunSkillInputSchema,
   SuggestSkillsInputSchema,
-  PromoteToSkillInputSchema,
 } from "./tool-schemas.ts";
 
 // ============================================================
@@ -116,7 +113,9 @@ async function handleReplayRun(args: Record<string, unknown>) {
 
 async function handleListRuns() {
   const records = await listRuns();
-  return { content: [{ type: "text", text: JSON.stringify(records, null, 2) }] };
+  return {
+    content: [{ type: "text", text: JSON.stringify(records, null, 2) }],
+  };
 }
 
 async function handleRunSkill(args: Record<string, unknown>) {
@@ -141,7 +140,9 @@ async function handleRunSkill(args: Record<string, unknown>) {
   }
 
   await saveRun(result.record);
-  return { content: [{ type: "text", text: JSON.stringify(result.record, null, 2) }] };
+  return {
+    content: [{ type: "text", text: JSON.stringify(result.record, null, 2) }],
+  };
 }
 
 async function handleSuggestSkills(args: Record<string, unknown>) {
@@ -199,7 +200,9 @@ async function handlePromoteToSkill(args: Record<string, unknown>) {
 
 async function handleListSkills() {
   const skills = await listSkills();
-  return { content: [{ type: "text", text: JSON.stringify({ skills }, null, 2) }] };
+  return {
+    content: [{ type: "text", text: JSON.stringify({ skills }, null, 2) }],
+  };
 }
 
 // ============================================================
@@ -210,7 +213,10 @@ async function handleListSkills() {
  * Start an HTTP MCP server (long-running daemon).
  * Registers endpoint info for discovery by stdio adapter.
  */
-export async function startHttpServer(port: number, host: string = "127.0.0.1"): Promise<{ port: number }> {
+export async function startHttpServer(
+  port: number,
+  host: string = "127.0.0.1",
+): Promise<{ port: number }> {
   const mcpServer = new Server(
     { name: "aves-mcp", version: "0.1.0" },
     { capabilities: { tools: {} } },
@@ -222,8 +228,13 @@ export async function startHttpServer(port: number, host: string = "127.0.0.1"):
 
   mcpServer.setRequestHandler(ListToolsRequestSchema, () => ({
     tools: [
-      RUN_SCRIPT_TOOL, REPLAY_RUN_TOOL, LIST_RUNS_TOOL,
-      RUN_SKILL_TOOL, SUGGEST_SKILLS_TOOL, PROMOTE_TO_SKILL_TOOL, LIST_SKILLS_TOOL,
+      RUN_SCRIPT_TOOL,
+      REPLAY_RUN_TOOL,
+      LIST_RUNS_TOOL,
+      RUN_SKILL_TOOL,
+      SUGGEST_SKILLS_TOOL,
+      PROMOTE_TO_SKILL_TOOL,
+      LIST_SKILLS_TOOL,
     ],
   }));
 
@@ -232,14 +243,22 @@ export async function startHttpServer(port: number, host: string = "127.0.0.1"):
     async (request: CallToolRequest) => {
       const { name, arguments: args } = request.params;
       switch (name) {
-        case "run_script": return await handleRunScript(args ?? {});
-        case "replay_run": return await handleReplayRun(args ?? {});
-        case "list_runs": return await handleListRuns();
-        case "run_skill": return await handleRunSkill(args ?? {});
-        case "suggest_skills": return await handleSuggestSkills(args ?? {});
-        case "promote_to_skill": return await handlePromoteToSkill(args ?? {});
-        case "list_skills": return await handleListSkills();
-        default: throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
+        case "run_script":
+          return await handleRunScript(args ?? {});
+        case "replay_run":
+          return await handleReplayRun(args ?? {});
+        case "list_runs":
+          return await handleListRuns();
+        case "run_skill":
+          return await handleRunSkill(args ?? {});
+        case "suggest_skills":
+          return await handleSuggestSkills(args ?? {});
+        case "promote_to_skill":
+          return await handlePromoteToSkill(args ?? {});
+        case "list_skills":
+          return await handleListSkills();
+        default:
+          throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
       }
     },
   );

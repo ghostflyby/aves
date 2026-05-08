@@ -1,13 +1,17 @@
 import { assertEquals, assertExists, assertStringIncludes } from "@std/assert";
-import { resolvePath, getDefaultSkillRoot, parseConfig } from "./config.ts";
+import { getDefaultSkillRoot, parseConfig, resolvePath } from "./config.ts";
 import {
-  validateManifest,
   hashManifest,
+  listSkills,
   loadSkillManifest,
   promoteRunToSkill,
-  listSkills,
+  validateManifest,
 } from "./skill.ts";
-import { saveSkillApproval, loadSkillApproval, removeSkillApproval } from "./run-store.ts";
+import {
+  loadSkillApproval,
+  removeSkillApproval,
+  saveSkillApproval,
+} from "./run-store.ts";
 import type { RunRecord, SkillManifest } from "./types.ts";
 
 // ============================================================
@@ -103,13 +107,24 @@ Deno.test("hashManifest - deterministic", async () => {
 });
 
 Deno.test("hashManifest - different perms yield different hashes", async () => {
-  const m1: SkillManifest = { name: "t", description: "d", permissions: {}, entrypoint: "./mod.ts", requires_approval: true };
-  const m2: SkillManifest = { name: "t", description: "d", permissions: { net: ["x"] }, entrypoint: "./mod.ts", requires_approval: true };
+  const m1: SkillManifest = {
+    name: "t",
+    description: "d",
+    permissions: {},
+    entrypoint: "./mod.ts",
+    requires_approval: true,
+  };
+  const m2: SkillManifest = {
+    name: "t",
+    description: "d",
+    permissions: { net: ["x"] },
+    entrypoint: "./mod.ts",
+    requires_approval: true,
+  };
   const h1 = await hashManifest(m1);
   const h2 = await hashManifest(m2);
   assertEquals(h1 !== h2, true);
 });
-
 
 // ============================================================
 // Skill disk storage tests
@@ -119,7 +134,8 @@ const TEST_RUN: RunRecord = {
   run_id: "test-promote-001",
   mode: "module",
   code_hash: "deadbeef",
-  schema_hash: "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+  schema_hash:
+    "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
   raw_input: { repo: "owner/name", issue: 42 },
   parsed_input: { repo: "owner/name", issue: 42 },
   permissions: { net: ["api.github.com"] },
@@ -157,12 +173,17 @@ Deno.test("promoteRunToSkill - creates skill files on disk", async () => {
     assertEquals(manifestResult.ok, true);
     if (manifestResult.ok) {
       assertEquals(manifestResult.manifest.name, "test-promote-skill");
-      assertEquals(manifestResult.manifest.description, "A promoted test skill");
+      assertEquals(
+        manifestResult.manifest.description,
+        "A promoted test skill",
+      );
     }
   }
 
   // Cleanup
-  try { await Deno.remove("/tmp/aves-test-promote", { recursive: true }); } catch {}
+  try {
+    await Deno.remove("/tmp/aves-test-promote", { recursive: true });
+  } catch {}
   if (prevData) Deno.env.set("AVES_DATA_DIR", prevData);
   else Deno.env.delete("AVES_DATA_DIR");
 });
@@ -190,7 +211,9 @@ Deno.test("listSkills - returns empty for clean state", async () => {
   const skills = await listSkills();
   assertEquals(Array.isArray(skills), true);
 
-  try { await Deno.remove("/tmp/aves-test-listskills", { recursive: true }); } catch {}
+  try {
+    await Deno.remove("/tmp/aves-test-listskills", { recursive: true });
+  } catch {}
   if (prevData) Deno.env.set("AVES_DATA_DIR", prevData);
   else Deno.env.delete("AVES_DATA_DIR");
 });

@@ -15,13 +15,10 @@ export function resolvePath(raw: string): string {
   }
 
   // $VAR and ${VAR} env substitution
-  resolved = resolved.replace(
-    /\$(\w+|\{(\w+)\})/g,
-    (_match, p1) => {
-      const varName = p1.startsWith("{") ? p1.slice(1, -1) : p1;
-      return Deno.env.get(varName) ?? "";
-    },
-  );
+  resolved = resolved.replace(/\$(\w+|\{(\w+)\})/g, (_match, p1) => {
+    const varName = p1.startsWith("{") ? p1.slice(1, -1) : p1;
+    return Deno.env.get(varName) ?? "";
+  });
 
   return resolved;
 }
@@ -79,7 +76,7 @@ export function getDefaultSkillRoot(): string {
  * Get all configured skill roots. Default root always comes first.
  */
 export async function getSkillRoots(): Promise<string[]> {
-  const config = _parsedConfig ?? await parseConfig();
+  const config = _parsedConfig ?? (await parseConfig());
   const defaultRoot = getDefaultSkillRoot();
   const extraRoots = config.skillRoots.filter((r) => r !== defaultRoot);
   return [defaultRoot, ...extraRoots];

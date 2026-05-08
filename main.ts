@@ -1,12 +1,12 @@
-import { startServer, startHttpServer } from "./src/mcp/server.ts";
+import { startHttpServer, startServer } from "./src/mcp/server.ts";
 import { ensureSkillRoots, parseConfig } from "./src/config.ts";
 import {
-  findRunningServer,
-  registerEndpoint,
   acquireLock,
-  releaseLock,
   cleanupAll,
   findAvailablePort,
+  findRunningServer,
+  registerEndpoint,
+  releaseLock,
 } from "./src/server-registry.ts";
 import { closeDb } from "./src/run-store.ts";
 
@@ -92,7 +92,9 @@ async function cmdStdio() {
 
   const existing = await findRunningServer();
   if (existing) {
-    console.error(`Connected to aves daemon at ${existing.host}:${existing.port}`);
+    console.error(
+      `Connected to aves daemon at ${existing.host}:${existing.port}`,
+    );
     await proxyToServer(existing.host, existing.port);
     return;
   }

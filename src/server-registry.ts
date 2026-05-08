@@ -58,7 +58,9 @@ export async function getPidPath(): Promise<string> {
  * Register the running server's endpoint info to disk.
  * The server dir must already exist (created by acquireLock).
  */
-export async function registerEndpoint(endpoint: ServerEndpoint): Promise<void> {
+export async function registerEndpoint(
+  endpoint: ServerEndpoint,
+): Promise<void> {
   await Deno.writeTextFile(
     await getEndpointPath(),
     JSON.stringify(endpoint, null, 2),
@@ -95,7 +97,9 @@ export async function findRunningServer(): Promise<ServerEndpoint | null> {
  * On failure (another server holds it): returns null if the other
  * server is alive; removes stale lock and returns "retry" signal.
  */
-export async function acquireLock(): Promise<{ ok: true } | { ok: false; reason: string }> {
+export async function acquireLock(): Promise<
+  { ok: true } | { ok: false; reason: string }
+> {
   const serverDir = await getServerDir();
   await Deno.mkdir(serverDir, { recursive: true });
 
@@ -108,7 +112,11 @@ export async function acquireLock(): Promise<{ ok: true } | { ok: false; reason:
     // Lock dir exists — check if the holder is alive
     const existing = await findRunningServer();
     if (existing) {
-      return { ok: false, reason: `already running on ${existing.host}:${existing.port} (pid ${existing.pid})` };
+      return {
+        ok: false,
+        reason:
+          `already running on ${existing.host}:${existing.port} (pid ${existing.pid})`,
+      };
     }
 
     // Stale lock — remove and retry
