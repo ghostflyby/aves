@@ -1,5 +1,5 @@
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import {Server} from "@modelcontextprotocol/sdk/server/index.js";
+import {StdioServerTransport} from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
   type CallToolRequest,
   CallToolRequestSchema,
@@ -7,20 +7,16 @@ import {
   ListToolsRequestSchema,
   McpError,
 } from "@modelcontextprotocol/sdk/types.js";
-import { executeRun } from "../runner.ts";
-import { listRuns, loadRun, saveRun } from "../run-store.ts";
-import {
-  RunRequestBaseSchema,
-  RunRequestSchema,
-  zodToJsonSchema,
-} from "../schemas.ts";
-import type { RunRequest } from "../types.ts";
+import {executeRun} from "../runner.ts";
+import {listRuns, loadRun, saveRun} from "../run-store.ts";
+import {RunRequestBaseSchema, RunRequestSchema,} from "../schemas.ts";
+import type {RunRequest} from "../types.ts";
 
 // Tool input schemas generated from Zod — single source of truth
 const RUN_SCRIPT_TOOL = {
   name: "run_script",
   description: "Execute a script in sandboxed Deno",
-  inputSchema: zodToJsonSchema(RunRequestBaseSchema),
+  inputSchema: RunRequestBaseSchema.toJSONSchema(),
 };
 
 const REPLAY_RUN_TOOL = {
@@ -50,7 +46,8 @@ async function handleRunScript(args: Record<string, unknown>) {
   if (!result.success) {
     throw new McpError(
       ErrorCode.InvalidParams,
-      result.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; "),
+      result.error.issues
+        .map((i) => `${i.path.join(".")}: ${i.message}`).join("; "),
     );
   }
 
@@ -98,7 +95,7 @@ export async function startServer() {
     },
   );
 
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({
+  server.setRequestHandler(ListToolsRequestSchema, () => ({
     tools: [RUN_SCRIPT_TOOL, REPLAY_RUN_TOOL, LIST_RUNS_TOOL],
   }));
 

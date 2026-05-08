@@ -1,17 +1,16 @@
 // Re-exports from the Zod-schema-based source of truth.
 // This file exists so all existing imports keep working.
 export type {
-  ScriptMode,
   Permissions,
-  RunRequest,
   RunRecord,
+  RunRequest,
+  ScriptMode,
   SkillManifest,
 } from "./schemas.ts";
 export {
-  ScriptModeSchema,
   PermissionsSchema,
-  RunRequestSchema,
   RunRecordSchema,
+  RunRequestSchema,
+  ScriptModeSchema,
   SkillManifestSchema,
-  zodToJsonSchema,
 } from "./schemas.ts";
