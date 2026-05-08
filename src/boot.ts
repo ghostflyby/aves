@@ -1,9 +1,12 @@
 /**
  * Generate the boot wrapper script content.
- * The boot wrapper is the real entry point for a sandboxed run.
+ * The boot wrapper is the process entry point.
+ *
+ * Module path comes from Deno.args[0] -- the runner passes the
+ * local filesystem path directly. No file copying needed.
  *
  * It:
- * 1. Imports user module (default export + inputSchema)
+ * 1. Imports user module from Deno.args[0] via dynamic import
  * 2. Reads input.json
  * 3. If inputSchema exists: parses with Zod,
  *    writes parsed_input.json + schema_hash.txt
@@ -11,7 +14,8 @@
  * 5. Writes output.json
  */
 export function generateBootWrapper(): string {
-  return `const userMod = await import("./user_module.ts");
+  return `const modulePath = Deno.args[0];
+const userMod = await import(modulePath);
 const userMain = userMod.default;
 const inputSchema = userMod.inputSchema;
 
@@ -31,13 +35,11 @@ if (inputSchema) {
   }
   input = result.data;
 
-  // Write parsed input for the runner to capture
   await Deno.writeTextFile(
     "./parsed_input.json",
     JSON.stringify(input)
   );
 
-  // Compute and write schema hash for clustering
   const schemaJson = JSON.stringify(inputSchema, (_key, value) =>
     typeof value === "function" ? undefined : value
   );

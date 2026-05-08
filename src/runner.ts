@@ -26,16 +26,12 @@ function mergePermissions(base: Permissions, extra: Permissions): Permissions {
     ...Object.keys(base),
     ...Object.keys(extra),
   ]) as Set<"read" | "write" | "net" | "env">;
-
   for (const key of allKeys) {
     const basePaths = base[key] ?? [];
     const extraPaths = extra[key] ?? [];
     const merged = [...new Set([...basePaths, ...extraPaths])];
-    if (merged.length > 0) {
-      result[key] = merged;
-    }
+    if (merged.length > 0) result[key] = merged;
   }
-
   return result;
 }
 
@@ -54,15 +50,18 @@ export async function executeRun(
   // 2. Write boot.ts
   await Deno.writeTextFile(`${runDir}/boot.ts`, generateBootWrapper());
 
-  // 3. Write user_module.ts
+  // 3. Resolve the module path for the child process
+  let moduleArg: string;
+  let moduleReadPaths: string[] = [];
+
   if (request.mode === "eval" && request.code) {
+    // Eval: write code to temp file, pass relative path
     await Deno.writeTextFile(`${runDir}/user_module.ts`, request.code);
+    moduleArg = "./user_module.ts";
   } else if (request.mode === "module" && request.modulePath) {
-    const resolvedPath = await Deno.realPath(request.modulePath);
-    await Deno.writeTextFile(
-      `${runDir}/user_module.ts`,
-      `export { default } from "${resolvedPath}";\nexport { inputSchema } from "${resolvedPath}";\n`,
-    );
+    // Module: use the actual filesystem path directly
+    moduleArg = await Deno.realPath(request.modulePath);
+    moduleReadPaths = [moduleArg];
   } else {
     throw new Error(
       `Invalid request: mode=${request.mode}, code or modulePath missing`,
@@ -73,14 +72,14 @@ export async function executeRun(
   const inputData = request.input ?? {};
   await Deno.writeTextFile(`${runDir}/input.json`, JSON.stringify(inputData));
 
-  // 5. Resolve permissions through policy
+  // 5. Resolve permissions
   const userPerms = request.permissions ?? {};
   const policy = options?.policy;
   const { granted, denied } = resolvePermissions(userPerms, policy);
 
   const realRunDir = await Deno.realPath(runDir);
   const runDirPerms: Permissions = {
-    read: [realRunDir],
+    read: [realRunDir, ...moduleReadPaths],
     write: [realRunDir],
   };
 
@@ -96,12 +95,15 @@ export async function executeRun(
 
   const permFlags = buildPermissionFlags(safePerms);
 
-  const args = ["run", "--no-prompt", ...permFlags, "boot.ts"];
+  // 6. Build args: boot.ts <module-path>
+  const args = ["run", "--no-prompt", ...permFlags, "boot.ts", moduleArg];
 
-  // 6. Compute code hash
-  const codeHash = request.code ? await sha256Hex(request.code) : undefined;
+  // 7. Compute code hash
+  const codeHash = request.code
+    ? await sha256Hex(request.code)
+    : undefined;
 
-  // 7. Spawn deno
+  // 8. Spawn deno
   const cmd = new Deno.Command("deno", {
     args,
     cwd: runDir,
@@ -118,7 +120,7 @@ export async function executeRun(
   const stderr = new TextDecoder().decode(proc.stderr);
   const exitCode = proc.code;
 
-  // 8. Read output
+  // 9. Read output
   let output: unknown = null;
   let error: string | undefined;
   try {
@@ -135,27 +137,19 @@ export async function executeRun(
     }
   }
 
-  // 9. Read optional parsed_input and schema_hash
+  // 10. Read optional parsed_input and schema_hash
   let parsedInput: Record<string, unknown> | undefined;
   let schemaHash: string | undefined;
   try {
     const text = await Deno.readTextFile(`${runDir}/parsed_input.json`);
     parsedInput = JSON.parse(text);
-  } catch {
-    // no parsed input (script had no inputSchema)
-  }
+  } catch { /* no parsed input */ }
   try {
     schemaHash = (await Deno.readTextFile(`${runDir}/schema_hash.txt`)).trim();
-  } catch {
-    // no schema hash
-  }
+  } catch { /* no schema hash */ }
 
-  // 10. Cleanup
-  try {
-    await Deno.remove(runDir, { recursive: true });
-  } catch {
-    // best-effort
-  }
+  // 11. Cleanup
+  try { await Deno.remove(runDir, { recursive: true }); } catch { /* best-effort */ }
 
   return {
     run_id: runId,
