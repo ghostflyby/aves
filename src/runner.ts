@@ -1,7 +1,6 @@
 import type { ServerPolicy } from "./policy.ts";
 import { resolvePermissions } from "./policy.ts";
 import type { Permissions, RunRecord, RunRequest } from "./types.ts";
-import { getSystemTempDir } from "./paths.ts";
 
 const BOOT_PATH = new URL("./boot.ts", import.meta.url).pathname;
 
@@ -42,12 +41,9 @@ export async function executeRun(
   options?: { policy?: ServerPolicy },
 ): Promise<RunRecord> {
   const runId = crypto.randomUUID();
-  const tmpDir = getSystemTempDir();
-  const runDir = `${tmpDir}/aves/runs/${runId}`;
+  const runDir = await Deno.makeTempDir({ prefix: "aves_" });
   const startedAt = new Date();
   const startedAtStr = startedAt.toISOString();
-
-  await Deno.mkdir(runDir, { recursive: true });
 
   const isEval = request.mode === "eval" && !!request.code;
 
