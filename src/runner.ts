@@ -155,109 +155,32 @@ export async function executeRun(
   options?: { policy?: ServerPolicy },
 ): Promise<RunRecord> {
   const runId = crypto.randomUUID();
-  const startedAt = new Date();
-  const startedAtStr = startedAt.toISOString();
-
   if (request.mode === "eval") {
     if (!request.code) {
       throw new Error("Invalid request: eval mode requires 'code'");
     }
-    const runDir = await Deno.makeTempDir({
+    // Write code to temp file, then delegate to runModuleInSandbox
+    const evalDir = await Deno.makeTempDir({
       prefix: "aves_",
-      suffix: `_run_${runId}`,
+      suffix: `_eval_${runId}`,
     });
-    const realRunDir = await Deno.realPath(runDir);
-    const modulePath = `${realRunDir}/user_module.ts`;
+    const modulePath = `${await Deno.realPath(evalDir)}/user_module.ts`;
     await Deno.writeTextFile(modulePath, request.code!);
-    await Deno.writeTextFile(
-      `${runDir}/input.json`,
-      JSON.stringify(request.input ?? {}),
-    );
+    const codeHash = await sha256Hex(request.code!);
 
     const userPerms = request.permissions ?? {};
     const { granted, denied } = resolvePermissions(userPerms, options?.policy);
 
-    const runDirPerms: Permissions = {
-      read: [realRunDir, BOOT_PATH],
-      write: [realRunDir],
-    };
+    const record = await runModuleInSandbox(
+      runId, modulePath, request.input ?? {},
+      granted, userPerms, denied, "eval", options?.policy,
+    );
 
-    const mergedPerms = mergePermissions(granted, runDirPerms);
-    const safePerms: Permissions = {};
-    for (const [key, paths] of Object.entries(mergedPerms)) {
-      if (key !== "run" && key !== "ffi" && paths) {
-        safePerms[key as keyof Permissions] = paths;
-      }
-    }
+    // Clean up eval dir (runModuleInSandbox cleans its own dir)
+    try { await Deno.remove(evalDir, { recursive: true }); } catch {}
 
-    const permFlags = buildPermissionFlags(safePerms);
-    const args = ["run", "--no-prompt", ...permFlags, BOOT_PATH, modulePath];
-    const codeHash = await sha256Hex(request.code!);
-
-    const cmd = new Deno.Command("deno", {
-      args,
-      cwd: runDir,
-      stdout: "piped",
-      stderr: "piped",
-    });
-
-    const proc = await cmd.output();
-    const finishedAt = new Date();
-    const finishedAtStr = finishedAt.toISOString();
-    const durationMs = finishedAt.getTime() - startedAt.getTime();
-
-    const stdout = new TextDecoder().decode(proc.stdout);
-    const stderr = new TextDecoder().decode(proc.stderr);
-    const exitCode = proc.code;
-
-    let output: unknown = null;
-    let error: string | undefined;
-    try {
-      const outputText = await Deno.readTextFile(`${realRunDir}/output.json`);
-      const parsed = JSON.parse(outputText);
-      if (parsed.ok) output = parsed.data;
-      else error = parsed.error;
-    } catch {
-      if (exitCode !== 0 && !error) {
-        error = stderr || "Process exited with non-zero code";
-      }
-    }
-
-    let parsedInput: Record<string, unknown> | undefined;
-    let schemaHash: string | undefined;
-    try {
-      parsedInput = JSON.parse(
-        await Deno.readTextFile(`${realRunDir}/parsed_input.json`),
-      );
-    } catch { /* no-op */ }
-    try {
-      schemaHash = (await Deno.readTextFile(`${realRunDir}/schema_hash.txt`))
-        .trim();
-    } catch { /* no-op */ }
-
-    try {
-      await Deno.remove(runDir, { recursive: true });
-    } catch { /* best-effort */ }
-
-    return {
-      run_id: runId,
-      mode: request.mode,
-      code_hash: codeHash,
-      schema_hash: schemaHash,
-      raw_input: request.input,
-      parsed_input: parsedInput,
-      permissions: userPerms,
-      granted_permissions: granted,
-      denied_permissions: denied.length > 0 ? denied : undefined,
-      stdout,
-      stderr,
-      exit_code: exitCode,
-      output,
-      error,
-      started_at: startedAtStr,
-      finished_at: finishedAtStr,
-      duration_ms: durationMs,
-    };
+    record.code_hash = codeHash;
+    return record;
   }
 
 
