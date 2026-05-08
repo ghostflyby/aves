@@ -174,63 +174,24 @@ async function handleRunScript(args: Record<string, unknown>) {
 async function handleRunSkill(args: Record<string, unknown>) {
   const skillPath = args.skill_path as string | undefined;
   if (!skillPath) {
-    throw new McpError(ErrorCode.InvalidParams, "skill_path is required");
+    throw new McpError(ErrorCode.InvalidParams, 'skill_path is required');
   }
-
   const input = (args.input ?? {}) as Record<string, unknown>;
   const permOverride = args.permissions as Permissions | undefined;
-
   const result = await executeSkillRun(skillPath, input, {
     permissionsOverride: permOverride,
   });
-
-  if (result.status === "need_approval") {
-    return {
-      content: [{
-        type: "text",
-        text: JSON.stringify({
-          status: "need_approval",
-          message:
-            "This skill requires approval. Call approve_skill to approve it, then retry.",
-          skill_path: result.approvalInfo?.skillPath,
-          manifest_hash: result.approvalInfo?.manifestHash,
-        }, null, 2),
-      }],
-    };
-  }
-
   if (!result.record) {
     throw new McpError(
       ErrorCode.InternalError,
-      "Skill execution failed: no record returned",
+      'Skill execution failed: no record returned',
     );
   }
-
   await saveRun(result.record);
   return {
     content: [{ type: "text", text: JSON.stringify(result.record, null, 2) }],
   };
 }
-
-async function handleApproveSkill(args: Record<string, unknown>) {
-  const skillPath = args.skill_path as string | undefined;
-  if (!skillPath) {
-    throw new McpError(ErrorCode.InvalidParams, "skill_path is required");
-  }
-
-  const result = await approveSkill(skillPath);
-  if (!result.ok) {
-    throw new McpError(ErrorCode.InvalidParams, result.error);
-  }
-
-  return {
-    content: [{
-      type: "text",
-      text: JSON.stringify({ status: "approved", skill_path: skillPath }, null, 2),
-    }],
-  };
-}
-
 async function handleReplayRun(args: Record<string, unknown>) {
   const runId = args.run_id as string | undefined;
   if (!runId) {
@@ -358,8 +319,6 @@ export async function startServer() {
           return await handlePromoteToSkill(args ?? {});
         case "list_skills":
           return await handleListSkills();
-        case "approve_skill":
-          return await handleApproveSkill(args ?? {});
         default:
           throw new McpError(
             ErrorCode.MethodNotFound,

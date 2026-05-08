@@ -4,9 +4,8 @@ import type { Permissions, RunRecord, RunRequest, SkillManifest } from "./types.
 import {
   loadSkillManifest,
   resolveSkillEntrypoint,
-  checkSkillApproval,
-  approveSkill,
   hashManifest,
+  approveSkill,
 } from "./skill.ts";
 
 const BOOT_PATH = new URL("./boot.ts", import.meta.url).pathname;
@@ -289,24 +288,13 @@ export async function executeRun(
 // ============================================================
 
 export interface SkillRunResult {
-  status: "completed" | "need_approval";
-  record?: RunRecord;
-  approvalInfo?: {
-    skillPath: string;
-    manifestHash: string;
-  };
+  record: RunRecord;
 }
 
 /**
  * Execute a skill by its directory path.
- *
- * Flow:
- * 1. Validate skill directory has a valid skill.json
- * 2. Check if manifest has been approved (hash match in skill_approvals)
- * 3. If approval needed → return need_approval status
- * 4. Merge permissions (manifest → request override, only shrink)
- * 5. Execute the entrypoint module
- * 6. Record run with skill metadata
+ * Relies on MCP Elicitation (destructiveHint) for client-side approval.
+ * Service side: loads manifest, merges permissions, executes, auto-approves.
  */
 export async function executeSkillRun(
   skillDir: string,
@@ -315,46 +303,25 @@ export async function executeSkillRun(
     policy?: ServerPolicy;
     permissionsOverride?: Permissions;
     projectPath?: string;
-    forceApproval?: boolean;
   },
 ): Promise<SkillRunResult> {
   const runId = crypto.randomUUID();
 
-  // 1. Load manifest
   const manifestResult = await loadSkillManifest(skillDir);
   if (!manifestResult.ok) {
     throw new Error(`Invalid skill at ${skillDir}: ${manifestResult.error}`);
   }
   const manifest = manifestResult.manifest;
 
-  // 2. Check approval
-  if (!options?.forceApproval) {
-    const approvalStatus = await checkSkillApproval(skillDir);
-    if (approvalStatus.status === "need_approval") {
-      return {
-        status: "need_approval",
-        approvalInfo: {
-          skillPath: approvalStatus.skillPath,
-          manifestHash: approvalStatus.manifestHash,
-        },
-      };
-    }
-  }
-
-  // 3. Resolve permissions — manifest as base, request shrinks
-  const basePerms = { ...manifest.permissions };
+  // Merge permissions: manifest as base, request only shrinks
   const override = options?.permissionsOverride ?? {};
-
-  // Only shrink: take intersection of each permission key
   const effectivePerms: Permissions = {};
   for (const key of ["read", "write", "net", "env"] as const) {
-    const base = basePerms[key] ?? [];
+    const base = manifest.permissions[key] ?? [];
     const over = override[key] ?? [];
     if (over.length > 0) {
-      // Only keep base paths that are also in override
       effectivePerms[key] = base.filter((p) => over.includes(p));
       if (effectivePerms[key]!.length === 0 && over.length > 0) {
-        // If override is non-empty but no intersection, use override (shrink)
         effectivePerms[key] = over;
       }
     } else if (base.length > 0) {
@@ -363,12 +330,8 @@ export async function executeSkillRun(
   }
 
   const { granted, denied } = resolvePermissions(effectivePerms, options?.policy);
-
-  // 4. Resolve entrypoint
   const entrypoint = resolveSkillEntrypoint(skillDir, manifest);
-  const mHash = await hashManifest(manifest);
 
-  // 5. Execute
   const record = await runModuleInSandbox(
     runId,
     entrypoint,
@@ -380,12 +343,16 @@ export async function executeSkillRun(
     options?.policy,
   );
 
-  // Tag with skill metadata
   record.skill_path = skillDir;
   record.project_path = options?.projectPath;
-  record.schema_hash = mHash;
+  record.schema_hash = await hashManifest(manifest);
 
-  return { status: "completed", record };
+  // Auto-approve after successful execution (client-side Elicitation already handled)
+  if (record.exit_code === 0) {
+    await approveSkill(skillDir).catch(() => {});
+  }
+
+  return { record };
 }
 
 async function sha256Hex(input: string): Promise<string> {
