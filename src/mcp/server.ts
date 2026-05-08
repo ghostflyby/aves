@@ -181,8 +181,7 @@ async function handleRunSkill(args: Record<string, unknown>) {
           },
         },
       },
-  // @ts-expect-error SDK ZodType mismatch
-      z.object({}),
+      z.object({}).passthrough(),
     );
 
     if ((elicitResult as Record<string, string>).action !== "accept") {
