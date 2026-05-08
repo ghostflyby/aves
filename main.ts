@@ -1,6 +1,6 @@
-import {executeRun} from "./src/runner.ts";
-import {loadRun, saveRun} from "./src/run-store.ts";
-import type {RunRequest} from "./src/types.ts";
+import { executeRun } from "./src/runner.ts";
+import { loadRun, saveRun } from "./src/run-store.ts";
+import type { RunRequest } from "./src/types.ts";
 
 async function cmdRun(args: string[]) {
   const filePath = args[0];

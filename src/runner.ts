@@ -99,9 +99,7 @@ export async function executeRun(
   const args = ["run", "--no-prompt", ...permFlags, "boot.ts"];
 
   // 6. Compute code hash
-  const codeHash = request.code
-    ? await sha256Hex(request.code)
-    : undefined;
+  const codeHash = request.code ? await sha256Hex(request.code) : undefined;
 
   // 7. Spawn deno
   const cmd = new Deno.Command("deno", {

@@ -1,14 +1,14 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
   type CallToolRequest,
+  CallToolRequestSchema,
   ErrorCode,
+  ListToolsRequestSchema,
   McpError,
 } from "@modelcontextprotocol/sdk/types.js";
 import { executeRun } from "../runner.ts";
-import { saveRun, loadRun, listRuns } from "../run-store.ts";
+import { listRuns, loadRun, saveRun } from "../run-store.ts";
 import type { RunRequest, ScriptMode } from "../types.ts";
 
 const RUN_SCRIPT_TOOL = {
@@ -150,26 +150,29 @@ export async function startServer() {
     tools: [RUN_SCRIPT_TOOL, REPLAY_RUN_TOOL, LIST_RUNS_TOOL],
   }));
 
-  server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest) => {
-    const { name, arguments: args } = request.params;
+  server.setRequestHandler(
+    CallToolRequestSchema,
+    async (request: CallToolRequest) => {
+      const { name, arguments: args } = request.params;
 
-    switch (name) {
-      case "run_script": {
-        return await handleRunScript(args ?? {});
+      switch (name) {
+        case "run_script": {
+          return await handleRunScript(args ?? {});
+        }
+        case "replay_run": {
+          return await handleReplayRun(args ?? {});
+        }
+        case "list_runs": {
+          return await handleListRuns();
+        }
+        default:
+          throw new McpError(
+            ErrorCode.MethodNotFound,
+            `Unknown tool: ${name}`,
+          );
       }
-      case "replay_run": {
-        return await handleReplayRun(args ?? {});
-      }
-      case "list_runs": {
-        return await handleListRuns();
-      }
-      default:
-        throw new McpError(
-          ErrorCode.MethodNotFound,
-          `Unknown tool: ${name}`,
-        );
-    }
-  });
+    },
+  );
 
   const transport = new StdioServerTransport();
   await server.connect(transport);

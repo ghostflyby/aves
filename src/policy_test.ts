@@ -1,8 +1,7 @@
 import { assertEquals } from "@std/assert";
 import {
-  resolvePermissions,
   isForbidden,
-  DEFAULT_POLICY,
+  resolvePermissions,
   type ServerPolicy,
 } from "./policy.ts";
 
