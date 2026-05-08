@@ -33,6 +33,7 @@ const SkillRunRequestSchema = z.object({
   mode: z.literal("skill"),
   code: z.string().optional(),
   modulePath: z.string().optional(),
+  skillPath: z.string().optional(),
   input: z.record(z.string(), z.unknown()).optional(),
   permissions: PermissionsSchema.optional(),
 });
@@ -61,13 +62,26 @@ export const RunRecordSchema = z.object({
   started_at: z.string(),
   finished_at: z.string(),
   duration_ms: z.number(),
+  // Skill evolution fields
+  project_path: z.string().optional(),
+  promoted_to_skill: z.string().optional(),
+  skill_path: z.string().optional(),
 });
 
 export const SkillManifestSchema = z.object({
   name: z.string(),
   description: z.string(),
+  version: z.string().optional(),
   permissions: PermissionsSchema,
   input_schema: z.record(z.string(), z.unknown()).optional(),
+  entrypoint: z.string().default("./mod.ts"),
+  requires_approval: z.boolean().default(true),
+  examples: z.array(z.unknown()).optional(),
+});
+
+export const SkillInstallOptionsSchema = z.object({
+  installPath: z.string().optional(),
+  installMethod: z.enum(["symlink", "copy"]).default("symlink"),
 });
 
 // ============================================================
@@ -79,3 +93,4 @@ export type Permissions = z.infer<typeof PermissionsSchema>;
 export type RunRequest = z.infer<typeof RunRequestSchema>;
 export type RunRecord = z.infer<typeof RunRecordSchema>;
 export type SkillManifest = z.infer<typeof SkillManifestSchema>;
+export type SkillInstallOptions = z.infer<typeof SkillInstallOptionsSchema>;

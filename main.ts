@@ -2,6 +2,7 @@ import { executeRun } from "./src/runner.ts";
 import { loadRun, saveRun } from "./src/run-store.ts";
 import type { RunRequest } from "./src/types.ts";
 import { startServer } from "./src/mcp/server.ts";
+import { ensureSkillRoots, parseConfig } from "./src/config.ts";
 
 async function cmdRun(args: string[]) {
   const filePath = args[0];
@@ -42,6 +43,10 @@ async function cmdReplay(args: string[]) {
 if (import.meta.main) {
   const cmd = Deno.args[0] ?? "run";
   const rest = Deno.args.slice(1);
+
+  // Load config on startup for serve/stdio
+  await parseConfig();
+  await ensureSkillRoots();
 
   switch (cmd) {
     case "run":

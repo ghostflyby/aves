@@ -11,6 +11,8 @@ function getDb(): Database {
     });
     _db = new Database(getAvesDbPath());
     _db.exec("PRAGMA journal_mode=WAL");
+
+    // Core runs table
     _db.exec(`
       CREATE TABLE IF NOT EXISTS runs (
         run_id TEXT PRIMARY KEY,
@@ -29,9 +31,27 @@ function getDb(): Database {
         error TEXT,
         started_at TEXT NOT NULL,
         finished_at TEXT NOT NULL,
-        duration_ms INTEGER NOT NULL
+        duration_ms INTEGER NOT NULL,
+        project_path TEXT,
+        promoted_to_skill TEXT,
+        skill_path TEXT
       )
     `);
+
+    // Migrate existing tables if needed
+    migrateColumns(_db, "runs", ["project_path", "promoted_to_skill", "skill_path"]);
+
+    // Skill approvals table
+    _db.exec(`
+      CREATE TABLE IF NOT EXISTS skill_approvals (
+        skill_path TEXT PRIMARY KEY,
+        manifest_hash TEXT NOT NULL,
+        approved_at TEXT NOT NULL,
+        requires_approval BOOLEAN DEFAULT true
+      )
+    `);
+
+    // Indexes
     _db.exec(
       "CREATE INDEX IF NOT EXISTS idx_runs_mode ON runs(mode)",
     );
@@ -44,8 +64,33 @@ function getDb(): Database {
     _db.exec(
       "CREATE INDEX IF NOT EXISTS idx_runs_started_at ON runs(started_at)",
     );
+    _db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_runs_project_path ON runs(project_path)",
+    );
   }
   return _db;
+}
+
+/**
+ * Migrate columns: add missing columns to an existing table.
+ */
+function migrateColumns(db: Database, table: string, columns: string[]): void {
+  const existing = new Set<string>();
+  const rows = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  for (const row of rows) {
+    existing.add(row.name);
+  }
+  for (const col of columns) {
+    if (!existing.has(col)) {
+      try {
+        // Infer type from column name patterns
+        const colType = col.endsWith("_ms") ? "INTEGER" : "TEXT";
+        db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${colType}`);
+      } catch {
+        // Ignore if already exists or unsupported
+      }
+    }
+  }
 }
 
 function toJson(val: unknown): string | null {
@@ -80,6 +125,9 @@ function rowToRecord(row: Record<string, unknown>): RunRecord {
     started_at: row.started_at as string,
     finished_at: row.finished_at as string,
     duration_ms: row.duration_ms as number,
+    project_path: row.project_path as string | undefined,
+    promoted_to_skill: row.promoted_to_skill as string | undefined,
+    skill_path: row.skill_path as string | undefined,
   };
 }
 
@@ -90,8 +138,9 @@ export async function saveRun(record: RunRecord): Promise<void> {
       (run_id, mode, code_hash, schema_hash,
        raw_input, parsed_input, permissions, granted_permissions, denied_permissions,
        stdout, stderr, exit_code, output, error,
-       started_at, finished_at, duration_ms)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       started_at, finished_at, duration_ms,
+       project_path, promoted_to_skill, skill_path)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run([
     record.run_id,
     record.mode,
@@ -110,6 +159,9 @@ export async function saveRun(record: RunRecord): Promise<void> {
     record.started_at,
     record.finished_at,
     record.duration_ms,
+    record.project_path ?? null,
+    record.promoted_to_skill ?? null,
+    record.skill_path ?? null,
   ]);
 }
 
@@ -144,8 +196,7 @@ export async function findClusteredRuns(): Promise<
      ORDER BY count DESC`,
   ).all() as { schema_hash: string; count: number }[];
 
-  const result: { schema_hash: string; count: number; runs: RunRecord[] }[] =
-    [];
+  const result: { schema_hash: string; count: number; runs: RunRecord[] }[] = [];
   for (const g of groups) {
     const rows = db.prepare(
       "SELECT * FROM runs WHERE schema_hash = ? ORDER BY started_at DESC",
@@ -185,6 +236,52 @@ export async function findRepeatedRuns(): Promise<
     });
   }
   return result;
+}
+
+// ============================================================
+// Skill approvals
+// ============================================================
+
+export interface SkillApproval {
+  skillPath: string;
+  manifestHash: string;
+  approvedAt: string;
+  requiresApproval: boolean;
+}
+
+export async function saveSkillApproval(approval: SkillApproval): Promise<void> {
+  const db = getDb();
+  db.prepare(`
+    INSERT OR REPLACE INTO skill_approvals
+      (skill_path, manifest_hash, approved_at, requires_approval)
+    VALUES (?, ?, ?, ?)
+  `).run([
+    approval.skillPath,
+    approval.manifestHash,
+    approval.approvedAt,
+    approval.requiresApproval ? 1 : 0,
+  ]);
+}
+
+export async function loadSkillApproval(
+  skillPath: string,
+): Promise<SkillApproval | null> {
+  const db = getDb();
+  const row = db.prepare(
+    "SELECT * FROM skill_approvals WHERE skill_path = ?",
+  ).get([skillPath]) as Record<string, unknown> | undefined;
+  if (!row) return null;
+  return {
+    skillPath: row.skill_path as string,
+    manifestHash: row.manifest_hash as string,
+    approvedAt: row.approved_at as string,
+    requiresApproval: (row.requires_approval as number) === 1,
+  };
+}
+
+export async function removeSkillApproval(skillPath: string): Promise<void> {
+  const db = getDb();
+  db.prepare("DELETE FROM skill_approvals WHERE skill_path = ?").run([skillPath]);
 }
 
 export function closeDb(): void {
