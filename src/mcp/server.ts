@@ -7,6 +7,7 @@ import {
   ListToolsRequestSchema,
   McpError,
 } from "@modelcontextprotocol/sdk/types.js";
+import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { executeRun, executeSkillRun } from "../runner.ts";
 import { listRuns, loadRun, saveRun, findClusteredRuns } from "../run-store.ts";
 import { RunRequestSchema } from "../schemas.ts";
@@ -204,6 +205,62 @@ async function handleListSkills() {
 // ============================================================
 // Server startup
 // ============================================================
+
+/**
+ * Start an HTTP MCP server (long-running daemon).
+ * Registers endpoint info for discovery by stdio adapter.
+ */
+export async function startHttpServer(port: number, host: string = "127.0.0.1"): Promise<{ port: number }> {
+  const mcpServer = new Server(
+    { name: "aves-mcp", version: "0.1.0" },
+    { capabilities: { tools: {} } },
+  );
+
+  const transport = new WebStandardStreamableHTTPServerTransport({
+    sessionIdGenerator: crypto.randomUUID.bind(crypto),
+  });
+
+  mcpServer.setRequestHandler(ListToolsRequestSchema, () => ({
+    tools: [
+      RUN_SCRIPT_TOOL, REPLAY_RUN_TOOL, LIST_RUNS_TOOL,
+      RUN_SKILL_TOOL, SUGGEST_SKILLS_TOOL, PROMOTE_TO_SKILL_TOOL, LIST_SKILLS_TOOL,
+    ],
+  }));
+
+  mcpServer.setRequestHandler(
+    CallToolRequestSchema,
+    async (request: CallToolRequest) => {
+      const { name, arguments: args } = request.params;
+      switch (name) {
+        case "run_script": return await handleRunScript(args ?? {});
+        case "replay_run": return await handleReplayRun(args ?? {});
+        case "list_runs": return await handleListRuns();
+        case "run_skill": return await handleRunSkill(args ?? {});
+        case "suggest_skills": return await handleSuggestSkills(args ?? {});
+        case "promote_to_skill": return await handlePromoteToSkill(args ?? {});
+        case "list_skills": return await handleListSkills();
+        default: throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
+      }
+    },
+  );
+
+  await mcpServer.connect(transport);
+
+  const controller = new AbortController();
+  Deno.serve({
+    port,
+    hostname: host,
+    signal: controller.signal,
+    onListen: ({ port: actualPort }) => {
+      console.error(`Aves MCP HTTP server listening on ${host}:${actualPort}`);
+    },
+  }, async (req: Request) => {
+    return transport.handleRequest(req);
+  });
+
+  // Return the port (may differ if 0 was passed)
+  return { port };
+}
 
 export async function startServer() {
   const server = new Server(

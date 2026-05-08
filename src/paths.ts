@@ -1,4 +1,5 @@
 import os from "node:os";
+import * as path from "path";
 
 /**
  * Aves data directory.
@@ -75,4 +76,33 @@ export function getAvesConfigDir(): string {
   }
 
   return `${Deno.env.get("HOME") ?? "/tmp"}/.config/aves`;
+}
+
+
+/**
+ * Aves state directory.
+ * Used for session-level runtime state: server registry, locks.
+ *
+ * Resolution order:
+ * 1. $AVES_STATE_DIR (override)
+ * 2. Platform-specific:
+ *    - Linux: $XDG_STATE_HOME/aves/ (fallback: ~/.local/state/aves/)
+ *    - macOS / Windows: same as getAvesDataDir()
+ */
+export function getAvesStateDir(): string {
+  const override = Deno.env.get("AVES_STATE_DIR");
+  if (override) return override;
+
+  const home = os.homedir();
+  const system = Deno.build.os;
+
+  if (system === "linux") {
+    const xdg = Deno.env.get("XDG_STATE_HOME");
+    if (xdg) return `${xdg}/aves`;
+    if (home) return `${home}/.local/state/aves`;
+  }
+
+  // macOS, Windows, and others: use data dir
+  return path.join(getAvesDataDir(),"state");
+
 }
