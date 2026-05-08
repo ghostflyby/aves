@@ -1,97 +1,74 @@
-import { Database } from "@db/sqlite";
+import { DatabaseSync } from "node:sqlite";
 import type { RunRecord } from "./types.ts";
 import { getAvesDbPath } from "./paths.ts";
 
-let _db: Database | null = null;
+// ============================================================
+// Database initialization — synchronous, WAL mode, no migration
+// ============================================================
 
-function getDb(): Database {
-  if (!_db) {
-    Deno.mkdirSync(getAvesDbPath().replace(/\/[^/]+$/, ""), {
-      recursive: true,
-    });
-    _db = new Database(getAvesDbPath());
-    _db.exec("PRAGMA journal_mode=WAL");
+let _db: DatabaseSync | null = null;
 
-    // Core runs table
-    _db.exec(`
-      CREATE TABLE IF NOT EXISTS runs (
-        run_id TEXT PRIMARY KEY,
-        mode TEXT NOT NULL,
-        code_hash TEXT,
-        schema_hash TEXT,
-        raw_input TEXT,
-        parsed_input TEXT,
-        permissions TEXT,
-        granted_permissions TEXT,
-        denied_permissions TEXT,
-        stdout TEXT,
-        stderr TEXT,
-        exit_code INTEGER,
-        output TEXT,
-        error TEXT,
-        started_at TEXT NOT NULL,
-        finished_at TEXT NOT NULL,
-        duration_ms INTEGER NOT NULL,
-        project_path TEXT,
-        promoted_to_skill TEXT,
-        skill_path TEXT
-      )
-    `);
+function getDb(): DatabaseSync {
+  if (_db) return _db;
 
-    // Migrate existing tables if needed
-    migrateColumns(_db, "runs", ["project_path", "promoted_to_skill", "skill_path"]);
+  Deno.mkdirSync(getAvesDbPath().replace(/\/[^/]+$/, ""), { recursive: true });
 
-    // Skill approvals table
-    _db.exec(`
-      CREATE TABLE IF NOT EXISTS skill_approvals (
-        skill_path TEXT PRIMARY KEY,
-        manifest_hash TEXT NOT NULL,
-        approved_at TEXT NOT NULL,
-        requires_approval BOOLEAN DEFAULT true
-      )
-    `);
+  _db = new DatabaseSync(getAvesDbPath());
+  _db.exec("PRAGMA journal_mode=WAL");
 
-    // Indexes
-    _db.exec(
-      "CREATE INDEX IF NOT EXISTS idx_runs_mode ON runs(mode)",
-    );
-    _db.exec(
-      "CREATE INDEX IF NOT EXISTS idx_runs_code_hash ON runs(code_hash)",
-    );
-    _db.exec(
-      "CREATE INDEX IF NOT EXISTS idx_runs_schema_hash ON runs(schema_hash)",
-    );
-    _db.exec(
-      "CREATE INDEX IF NOT EXISTS idx_runs_started_at ON runs(started_at)",
-    );
-    _db.exec(
-      "CREATE INDEX IF NOT EXISTS idx_runs_project_path ON runs(project_path)",
-    );
-  }
+  _db.exec(`
+    CREATE TABLE IF NOT EXISTS runs (
+      run_id TEXT PRIMARY KEY,
+      mode TEXT NOT NULL,
+      code_hash TEXT,
+      schema_hash TEXT,
+      raw_input TEXT,
+      parsed_input TEXT,
+      permissions TEXT,
+      granted_permissions TEXT,
+      denied_permissions TEXT,
+      stdout TEXT,
+      stderr TEXT,
+      exit_code INTEGER,
+      output TEXT,
+      error TEXT,
+      started_at TEXT NOT NULL,
+      finished_at TEXT NOT NULL,
+      duration_ms INTEGER NOT NULL,
+      project_path TEXT,
+      promoted_to_skill TEXT,
+      skill_path TEXT
+    )
+  `);
+
+  _db.exec(`
+    CREATE TABLE IF NOT EXISTS skill_approvals (
+      skill_path TEXT PRIMARY KEY,
+      manifest_hash TEXT NOT NULL,
+      approved_at TEXT NOT NULL,
+      requires_approval BOOLEAN DEFAULT true
+    )
+  `);
+
+  _db.exec("CREATE INDEX IF NOT EXISTS idx_runs_mode ON runs(mode)");
+  _db.exec("CREATE INDEX IF NOT EXISTS idx_runs_code_hash ON runs(code_hash)");
+  _db.exec("CREATE INDEX IF NOT EXISTS idx_runs_schema_hash ON runs(schema_hash)");
+  _db.exec("CREATE INDEX IF NOT EXISTS idx_runs_started_at ON runs(started_at)");
+  _db.exec("CREATE INDEX IF NOT EXISTS idx_runs_project_path ON runs(project_path)");
+
   return _db;
 }
 
-/**
- * Migrate columns: add missing columns to an existing table.
- */
-function migrateColumns(db: Database, table: string, columns: string[]): void {
-  const existing = new Set<string>();
-  const rows = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
-  for (const row of rows) {
-    existing.add(row.name);
-  }
-  for (const col of columns) {
-    if (!existing.has(col)) {
-      try {
-        // Infer type from column name patterns
-        const colType = col.endsWith("_ms") ? "INTEGER" : "TEXT";
-        db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${colType}`);
-      } catch {
-        // Ignore if already exists or unsupported
-      }
-    }
+export function closeDb(): void {
+  if (_db) {
+    _db.close();
+    _db = null;
   }
 }
+
+// ============================================================
+// Serialization helpers
+// ============================================================
 
 function toJson(val: unknown): string | null {
   return val !== undefined ? JSON.stringify(val) : null;
@@ -117,8 +94,8 @@ function rowToRecord(row: Record<string, unknown>): RunRecord {
     permissions: fromJson(row.permissions) ?? {},
     granted_permissions: fromJson(row.granted_permissions) ?? {},
     denied_permissions: fromJson(row.denied_permissions),
-    stdout: row.stdout as string ?? "",
-    stderr: row.stderr as string ?? "",
+    stdout: (row.stdout as string) ?? "",
+    stderr: (row.stderr as string) ?? "",
     exit_code: row.exit_code as number | null,
     output: fromJson(row.output),
     error: row.error as string | undefined,
@@ -131,9 +108,12 @@ function rowToRecord(row: Record<string, unknown>): RunRecord {
   };
 }
 
-export async function saveRun(record: RunRecord): Promise<void> {
-  const db = getDb();
-  db.prepare(`
+// ============================================================
+// Runs CRUD
+// ============================================================
+
+export function saveRun(record: RunRecord): void {
+  getDb().prepare(`
     INSERT OR REPLACE INTO runs
       (run_id, mode, code_hash, schema_hash,
        raw_input, parsed_input, permissions, granted_permissions, denied_permissions,
@@ -141,7 +121,7 @@ export async function saveRun(record: RunRecord): Promise<void> {
        started_at, finished_at, duration_ms,
        project_path, promoted_to_skill, skill_path)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run([
+  `).run(
     record.run_id,
     record.mode,
     record.code_hash ?? null,
@@ -162,80 +142,71 @@ export async function saveRun(record: RunRecord): Promise<void> {
     record.project_path ?? null,
     record.promoted_to_skill ?? null,
     record.skill_path ?? null,
-  ]);
+  );
 }
 
-export async function loadRun(runId: string): Promise<RunRecord | null> {
-  const db = getDb();
-  const row = db.prepare("SELECT * FROM runs WHERE run_id = ?").get([runId]) as
-    | Record<string, unknown>
-    | undefined;
-  if (!row) return null;
-  return rowToRecord(row);
+export function loadRun(runId: string): RunRecord | null {
+  const row = getDb().prepare(
+    "SELECT * FROM runs WHERE run_id = ?",
+  ).get(runId) as Record<string, unknown> | undefined;
+  return row ? rowToRecord(row) : null;
 }
 
-export async function listRuns(): Promise<RunRecord[]> {
-  const db = getDb();
-  const rows = db.prepare(
+export function listRuns(): RunRecord[] {
+  return (getDb().prepare(
     "SELECT * FROM runs ORDER BY started_at DESC",
-  ).iter() as Iterable<Record<string, unknown>>;
-  return Array.from(rows).map(rowToRecord);
+  ).all() as Record<string, unknown>[]).map(rowToRecord);
 }
 
 /**
- * Find runs that share the same schema hash — potential skill candidates.
+ * Find runs grouped by schema_hash (same Zod input schema structure).
+ * Clusters of 2+ runs are skill candidates for promotion.
  */
-export async function findClusteredRuns(): Promise<
-  { schema_hash: string; count: number; runs: RunRecord[] }[]
-> {
+export function findClusteredRuns(): {
+  schema_hash: string;
+  count: number;
+  runs: RunRecord[];
+}[] {
   const db = getDb();
-  const groups = db.prepare(
-    `SELECT schema_hash, COUNT(*) as count
-     FROM runs WHERE schema_hash IS NOT NULL
-     GROUP BY schema_hash HAVING count > 1
-     ORDER BY count DESC`,
-  ).all() as { schema_hash: string; count: number }[];
+  const groups = db.prepare(`
+    SELECT schema_hash, COUNT(*) as count
+    FROM runs WHERE schema_hash IS NOT NULL
+    GROUP BY schema_hash HAVING count > 1
+    ORDER BY count DESC
+  `).all() as { schema_hash: string; count: number }[];
 
-  const result: { schema_hash: string; count: number; runs: RunRecord[] }[] = [];
-  for (const g of groups) {
-    const rows = db.prepare(
+  return groups.map((g) => ({
+    schema_hash: g.schema_hash,
+    count: g.count,
+    runs: (db.prepare(
       "SELECT * FROM runs WHERE schema_hash = ? ORDER BY started_at DESC",
-    ).iter([g.schema_hash]) as Iterable<Record<string, unknown>>;
-    result.push({
-      schema_hash: g.schema_hash,
-      count: g.count,
-      runs: Array.from(rows).map(rowToRecord),
-    });
-  }
-  return result;
+    ).all(g.schema_hash) as Record<string, unknown>[]).map(rowToRecord),
+  }));
 }
 
 /**
- * Find runs that used the same code (same code_hash) — repeated usage clusters.
+ * Find runs grouped by code_hash (same source code).
  */
-export async function findRepeatedRuns(): Promise<
-  { code_hash: string; count: number; runs: RunRecord[] }[]
-> {
+export function findRepeatedRuns(): {
+  code_hash: string;
+  count: number;
+  runs: RunRecord[];
+}[] {
   const db = getDb();
-  const groups = db.prepare(
-    `SELECT code_hash, COUNT(*) as count
-     FROM runs WHERE code_hash IS NOT NULL
-     GROUP BY code_hash HAVING count > 1
-     ORDER BY count DESC`,
-  ).all() as { code_hash: string; count: number }[];
+  const groups = db.prepare(`
+    SELECT code_hash, COUNT(*) as count
+    FROM runs WHERE code_hash IS NOT NULL
+    GROUP BY code_hash HAVING count > 1
+    ORDER BY count DESC
+  `).all() as { code_hash: string; count: number }[];
 
-  const result: { code_hash: string; count: number; runs: RunRecord[] }[] = [];
-  for (const g of groups) {
-    const rows = db.prepare(
+  return groups.map((g) => ({
+    code_hash: g.code_hash,
+    count: g.count,
+    runs: (db.prepare(
       "SELECT * FROM runs WHERE code_hash = ? ORDER BY started_at DESC",
-    ).iter([g.code_hash]) as Iterable<Record<string, unknown>>;
-    result.push({
-      code_hash: g.code_hash,
-      count: g.count,
-      runs: Array.from(rows).map(rowToRecord),
-    });
-  }
-  return result;
+    ).all(g.code_hash) as Record<string, unknown>[]).map(rowToRecord),
+  }));
 }
 
 // ============================================================
@@ -249,27 +220,25 @@ export interface SkillApproval {
   requiresApproval: boolean;
 }
 
-export async function saveSkillApproval(approval: SkillApproval): Promise<void> {
-  const db = getDb();
-  db.prepare(`
+export function saveSkillApproval(approval: SkillApproval): void {
+  getDb().prepare(`
     INSERT OR REPLACE INTO skill_approvals
       (skill_path, manifest_hash, approved_at, requires_approval)
     VALUES (?, ?, ?, ?)
-  `).run([
+  `).run(
     approval.skillPath,
     approval.manifestHash,
     approval.approvedAt,
     approval.requiresApproval ? 1 : 0,
-  ]);
+  );
 }
 
-export async function loadSkillApproval(
+export function loadSkillApproval(
   skillPath: string,
-): Promise<SkillApproval | null> {
-  const db = getDb();
-  const row = db.prepare(
+): SkillApproval | null {
+  const row = getDb().prepare(
     "SELECT * FROM skill_approvals WHERE skill_path = ?",
-  ).get([skillPath]) as Record<string, unknown> | undefined;
+  ).get(skillPath) as Record<string, unknown> | undefined;
   if (!row) return null;
   return {
     skillPath: row.skill_path as string,
@@ -279,14 +248,8 @@ export async function loadSkillApproval(
   };
 }
 
-export async function removeSkillApproval(skillPath: string): Promise<void> {
-  const db = getDb();
-  db.prepare("DELETE FROM skill_approvals WHERE skill_path = ?").run([skillPath]);
-}
-
-export function closeDb(): void {
-  if (_db) {
-    _db.close();
-    _db = null;
-  }
+export function removeSkillApproval(skillPath: string): void {
+  getDb().prepare(
+    "DELETE FROM skill_approvals WHERE skill_path = ?",
+  ).run(skillPath);
 }

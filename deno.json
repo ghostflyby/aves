@@ -7,7 +7,6 @@
     "@std/assert": "jsr:@std/assert@1",
     "@std/toml": "jsr:@std/toml@1",
     "zod": "npm:zod@4",
-    "@db/sqlite": "jsr:@db/sqlite@0.12",
     "@modelcontextprotocol/sdk": "npm:@modelcontextprotocol/sdk@^1.11.0"
   }
 }

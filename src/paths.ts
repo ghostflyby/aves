@@ -1,5 +1,5 @@
 import os from "node:os";
-import * as path from "path";
+import * as path from "node:path";
 
 /**
  * Aves data directory.
