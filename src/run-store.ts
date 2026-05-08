@@ -6,7 +6,9 @@ let _db: Database | null = null;
 
 function getDb(): Database {
   if (!_db) {
-    Deno.mkdirSync(getAvesDbPath().replace(/\/[^/]+$/, ""), { recursive: true });
+    Deno.mkdirSync(getAvesDbPath().replace(/\/[^/]+$/, ""), {
+      recursive: true,
+    });
     _db = new Database(getAvesDbPath());
     _db.exec("PRAGMA journal_mode=WAL");
     _db.exec(`
@@ -52,7 +54,11 @@ function toJson(val: unknown): string | null {
 
 function fromJson<T>(val: unknown): T | undefined {
   if (val === null || val === undefined) return undefined;
-  try { return JSON.parse(val as string) as T; } catch { return undefined; }
+  try {
+    return JSON.parse(val as string) as T;
+  } catch {
+    return undefined;
+  }
 }
 
 function rowToRecord(row: Record<string, unknown>): RunRecord {
@@ -138,7 +144,8 @@ export async function findClusteredRuns(): Promise<
      ORDER BY count DESC`,
   ).all() as { schema_hash: string; count: number }[];
 
-  const result: { schema_hash: string; count: number; runs: RunRecord[] }[] = [];
+  const result: { schema_hash: string; count: number; runs: RunRecord[] }[] =
+    [];
   for (const g of groups) {
     const rows = db.prepare(
       "SELECT * FROM runs WHERE schema_hash = ? ORDER BY started_at DESC",

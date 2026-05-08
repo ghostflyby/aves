@@ -41,7 +41,10 @@ export async function executeRun(
   options?: { policy?: ServerPolicy },
 ): Promise<RunRecord> {
   const runId = crypto.randomUUID();
-  const runDir = await Deno.makeTempDir({ prefix: "aves_" });
+  const runDir = await Deno.makeTempDir({
+    prefix: "aves_",
+    suffix: `_run_${runId}`,
+  });
   const startedAt = new Date();
   const startedAtStr = startedAt.toISOString();
 
@@ -55,7 +58,10 @@ export async function executeRun(
     );
   }
 
-  await Deno.writeTextFile(`${runDir}/input.json`, JSON.stringify(request.input ?? {}));
+  await Deno.writeTextFile(
+    `${runDir}/input.json`,
+    JSON.stringify(request.input ?? {}),
+  );
 
   const realRunDir = await Deno.realPath(runDir);
   const moduleArg = isEval
@@ -85,7 +91,10 @@ export async function executeRun(
   const codeHash = request.code ? await sha256Hex(request.code) : undefined;
 
   const cmd = new Deno.Command("deno", {
-    args, cwd: runDir, stdout: "piped", stderr: "piped",
+    args,
+    cwd: runDir,
+    stdout: "piped",
+    stderr: "piped",
   });
 
   const proc = cmd.outputSync();
@@ -105,32 +114,52 @@ export async function executeRun(
     if (parsed.ok) output = parsed.data;
     else error = parsed.error;
   } catch {
-    if (exitCode !== 0 && !error) error = stderr || "Process exited with non-zero code";
+    if (exitCode !== 0 && !error) {
+      error = stderr || "Process exited with non-zero code";
+    }
   }
 
   let parsedInput: Record<string, unknown> | undefined;
   let schemaHash: string | undefined;
   try {
-    parsedInput = JSON.parse(await Deno.readTextFile(`${realRunDir}/parsed_input.json`));
+    parsedInput = JSON.parse(
+      await Deno.readTextFile(`${realRunDir}/parsed_input.json`),
+    );
   } catch { /* no-op */ }
   try {
-    schemaHash = (await Deno.readTextFile(`${realRunDir}/schema_hash.txt`)).trim();
+    schemaHash = (await Deno.readTextFile(`${realRunDir}/schema_hash.txt`))
+      .trim();
   } catch { /* no-op */ }
 
-  try { await Deno.remove(runDir, { recursive: true }); } catch { /* best-effort */ }
+  try {
+    await Deno.remove(runDir, { recursive: true });
+  } catch { /* best-effort */ }
 
   return {
-    run_id: runId, mode: request.mode, code_hash: codeHash, schema_hash: schemaHash,
-    raw_input: request.input, parsed_input: parsedInput,
-    permissions: userPerms, granted_permissions: granted,
+    run_id: runId,
+    mode: request.mode,
+    code_hash: codeHash,
+    schema_hash: schemaHash,
+    raw_input: request.input,
+    parsed_input: parsedInput,
+    permissions: userPerms,
+    granted_permissions: granted,
     denied_permissions: denied.length > 0 ? denied : undefined,
-    stdout, stderr, exit_code: exitCode, output, error,
-    started_at: startedAtStr, finished_at: finishedAtStr, duration_ms: durationMs,
+    stdout,
+    stderr,
+    exit_code: exitCode,
+    output,
+    error,
+    started_at: startedAtStr,
+    finished_at: finishedAtStr,
+    duration_ms: durationMs,
   };
 }
 
 async function sha256Hex(input: string): Promise<string> {
   const enc = new TextEncoder();
   const hash = await crypto.subtle.digest("SHA-256", enc.encode(input));
-  return Array.from(new Uint8Array(hash)).map((b) => b.toString(16).padStart(2, "0")).join("");
+  return Array.from(new Uint8Array(hash)).map((b) =>
+    b.toString(16).padStart(2, "0")
+  ).join("");
 }

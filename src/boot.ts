@@ -26,14 +26,17 @@ if (inputSchema) {
 
   await Deno.writeTextFile("./parsed_input.json", JSON.stringify(input));
 
-  const schemaJson = JSON.stringify(inputSchema, (_key, value) =>
-    typeof value === "function" ? undefined : value
+  const schemaJson = JSON.stringify(
+    inputSchema,
+    (_key, value) => typeof value === "function" ? undefined : value,
   );
   const _enc = new TextEncoder();
   const _data = _enc.encode(schemaJson);
   const _hashBuf = await crypto.subtle.digest("SHA-256", _data);
   const _hashArr = Array.from(new Uint8Array(_hashBuf));
-  const _hashHex = _hashArr.map((b) => b.toString(16).padStart(2, "0")).join("");
+  const _hashHex = _hashArr.map((b) => b.toString(16).padStart(2, "0")).join(
+    "",
+  );
   await Deno.writeTextFile("./schema_hash.txt", _hashHex);
 }
 

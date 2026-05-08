@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { SkillManifestSchema } from "./schemas.ts";
-import type { SkillManifest, Permissions, RunRecord } from "./types.ts";
+import type { Permissions, RunRecord, SkillManifest } from "./types.ts";
 import { resolvePermissions } from "./policy.ts";
 import { saveRun } from "./run-store.ts";
 
@@ -24,7 +24,8 @@ export function validateManifest(
     return {
       ok: false,
       error: `Invalid skill manifest: ${
-        result.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")
+        result.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`)
+          .join("; ")
       }`,
     };
   }
@@ -65,7 +66,9 @@ export async function promoteRunToSkill(
   if (denied.length > 0) {
     return {
       ok: false,
-      error: `Cannot promote: permissions were denied for: ${denied.join(", ")}`,
+      error: `Cannot promote: permissions were denied for: ${
+        denied.join(", ")
+      }`,
     };
   }
 
