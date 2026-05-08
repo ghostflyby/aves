@@ -49,6 +49,11 @@ if (import.meta.main) {
     case "replay":
       await cmdReplay(rest);
       break;
+    case "serve":
+    case "stdio":
+      const { startServer } = await import("./src/mcp/server.ts");
+      await startServer();
+      break;
     default:
       console.error(`Unknown command: ${cmd}`);
       console.error("Usage: aves <run|replay> [args...]");

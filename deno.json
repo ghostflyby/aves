@@ -5,6 +5,7 @@
   },
   "imports": {
     "@std/assert": "jsr:@std/assert@1",
-    "zod": "npm:zod"
+    "zod": "npm:zod",
+    "@modelcontextprotocol/sdk": "npm:@modelcontextprotocol/sdk@^1.11.0"
   }
 }
