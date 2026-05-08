@@ -16,7 +16,6 @@ export const PermissionsSchema = z.object({
 const EvalRunRequestSchema = z.object({
   mode: z.literal("eval"),
   code: z.string(),
-  modulePath: z.string().optional(),
   input: z.record(z.string(), z.unknown()).optional(),
   permissions: PermissionsSchema.optional(),
 });

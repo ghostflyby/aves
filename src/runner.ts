@@ -155,11 +155,13 @@ export async function executeRun(
   options?: { policy?: ServerPolicy },
 ): Promise<RunRecord> {
   const runId = crypto.randomUUID();
-  const isEval = request.mode === "eval" && !!request.code;
   const startedAt = new Date();
   const startedAtStr = startedAt.toISOString();
 
-  if (isEval) {
+  if (request.mode === "eval") {
+    if (!request.code) {
+      throw new Error("Invalid request: eval mode requires 'code'");
+    }
     const runDir = await Deno.makeTempDir({
       prefix: "aves_",
       suffix: `_run_${runId}`,
@@ -258,12 +260,14 @@ export async function executeRun(
     };
   }
 
-  if (request.mode === "eval" && !request.code) {
-    throw new Error("Invalid request: eval mode requires 'code'");
-  }
 
-  const modulePath = request.modulePath
-    ? await Deno.realPath(request.modulePath)
+
+  if (request.mode !== "module") {
+    throw new Error("Unreachable: expected module mode");
+  }
+  const moduleReq = request as Extract<RunRequest, { mode: "module" }>;
+  const modulePath = moduleReq.modulePath
+    ? await Deno.realPath(moduleReq.modulePath)
     : null;
 
   const userPerms = request.permissions ?? {};
