@@ -1,6 +1,7 @@
 import type { ServerPolicy } from "./policy.ts";
 import { resolvePermissions } from "./policy.ts";
 import type { Permissions, RunRecord, RunRequest } from "./types.ts";
+import { getSystemTempDir } from "./paths.ts";
 
 const BOOT_PATH = new URL("./boot.ts", import.meta.url).pathname;
 
@@ -41,13 +42,13 @@ export async function executeRun(
   options?: { policy?: ServerPolicy },
 ): Promise<RunRecord> {
   const runId = crypto.randomUUID();
-  const runDir = `/tmp/aves/runs/${runId}`;
+  const tmpDir = getSystemTempDir();
+  const runDir = `${tmpDir}/aves/runs/${runId}`;
   const startedAt = new Date();
   const startedAtStr = startedAt.toISOString();
 
   await Deno.mkdir(runDir, { recursive: true });
 
-  // Module resolution
   const isEval = request.mode === "eval" && !!request.code;
 
   if (isEval) {
@@ -60,14 +61,12 @@ export async function executeRun(
 
   await Deno.writeTextFile(`${runDir}/input.json`, JSON.stringify(request.input ?? {}));
 
-  // Resolve absolute paths
   const realRunDir = await Deno.realPath(runDir);
   const moduleArg = isEval
     ? `${realRunDir}/user_module.ts`
     : await Deno.realPath(request.modulePath!);
   const moduleReadPaths = isEval ? [] : [moduleArg];
 
-  // Permissions
   const userPerms = request.permissions ?? {};
   const policy = options?.policy;
   const { granted, denied } = resolvePermissions(userPerms, policy);
@@ -86,8 +85,6 @@ export async function executeRun(
   }
 
   const permFlags = buildPermissionFlags(safePerms);
-
-  // Spawn
   const args = ["run", "--no-prompt", ...permFlags, BOOT_PATH, moduleArg];
   const codeHash = request.code ? await sha256Hex(request.code) : undefined;
 
@@ -104,7 +101,6 @@ export async function executeRun(
   const stderr = new TextDecoder().decode(proc.stderr);
   const exitCode = proc.code;
 
-  // Read output
   let output: unknown = null;
   let error: string | undefined;
   try {
@@ -116,7 +112,6 @@ export async function executeRun(
     if (exitCode !== 0 && !error) error = stderr || "Process exited with non-zero code";
   }
 
-  // Read optional metadata
   let parsedInput: Record<string, unknown> | undefined;
   let schemaHash: string | undefined;
   try {
@@ -126,7 +121,6 @@ export async function executeRun(
     schemaHash = (await Deno.readTextFile(`${realRunDir}/schema_hash.txt`)).trim();
   } catch { /* no-op */ }
 
-  // Cleanup
   try { await Deno.remove(runDir, { recursive: true }); } catch { /* best-effort */ }
 
   return {

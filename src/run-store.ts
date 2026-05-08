@@ -1,41 +1,188 @@
+import { Database } from "@db/sqlite";
 import type { RunRecord } from "./types.ts";
+import { getAvesDbPath } from "./paths.ts";
 
-/**
- * Aves state directory.
- * Uses XDG-compatible path within the temp directory for sandbox compatibility.
- */
-export const AVES_STATE_DIR = "/tmp/aves/state";
-export const RUNS_DIR = `${AVES_STATE_DIR}/runs`;
+let _db: Database | null = null;
+
+function getDb(): Database {
+  if (!_db) {
+    Deno.mkdirSync(getAvesDbPath().replace(/\/[^/]+$/, ""), { recursive: true });
+    _db = new Database(getAvesDbPath());
+    _db.exec("PRAGMA journal_mode=WAL");
+    _db.exec(`
+      CREATE TABLE IF NOT EXISTS runs (
+        run_id TEXT PRIMARY KEY,
+        mode TEXT NOT NULL,
+        code_hash TEXT,
+        schema_hash TEXT,
+        raw_input TEXT,
+        parsed_input TEXT,
+        permissions TEXT,
+        granted_permissions TEXT,
+        denied_permissions TEXT,
+        stdout TEXT,
+        stderr TEXT,
+        exit_code INTEGER,
+        output TEXT,
+        error TEXT,
+        started_at TEXT NOT NULL,
+        finished_at TEXT NOT NULL,
+        duration_ms INTEGER NOT NULL
+      )
+    `);
+    _db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_runs_mode ON runs(mode)",
+    );
+    _db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_runs_code_hash ON runs(code_hash)",
+    );
+    _db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_runs_schema_hash ON runs(schema_hash)",
+    );
+    _db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_runs_started_at ON runs(started_at)",
+    );
+  }
+  return _db;
+}
+
+function toJson(val: unknown): string | null {
+  return val !== undefined ? JSON.stringify(val) : null;
+}
+
+function fromJson<T>(val: unknown): T | undefined {
+  if (val === null || val === undefined) return undefined;
+  try { return JSON.parse(val as string) as T; } catch { return undefined; }
+}
+
+function rowToRecord(row: Record<string, unknown>): RunRecord {
+  return {
+    run_id: row.run_id as string,
+    mode: row.mode as RunRecord["mode"],
+    code_hash: row.code_hash as string | undefined,
+    schema_hash: row.schema_hash as string | undefined,
+    raw_input: fromJson(row.raw_input),
+    parsed_input: fromJson(row.parsed_input),
+    permissions: fromJson(row.permissions) ?? {},
+    granted_permissions: fromJson(row.granted_permissions) ?? {},
+    denied_permissions: fromJson(row.denied_permissions),
+    stdout: row.stdout as string ?? "",
+    stderr: row.stderr as string ?? "",
+    exit_code: row.exit_code as number | null,
+    output: fromJson(row.output),
+    error: row.error as string | undefined,
+    started_at: row.started_at as string,
+    finished_at: row.finished_at as string,
+    duration_ms: row.duration_ms as number,
+  };
+}
 
 export async function saveRun(record: RunRecord): Promise<void> {
-  await Deno.mkdir(RUNS_DIR, { recursive: true });
-  const path = `${RUNS_DIR}/${record.run_id}.json`;
-  await Deno.writeTextFile(path, JSON.stringify(record, null, 2));
+  const db = getDb();
+  db.prepare(`
+    INSERT OR REPLACE INTO runs
+      (run_id, mode, code_hash, schema_hash,
+       raw_input, parsed_input, permissions, granted_permissions, denied_permissions,
+       stdout, stderr, exit_code, output, error,
+       started_at, finished_at, duration_ms)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run([
+    record.run_id,
+    record.mode,
+    record.code_hash ?? null,
+    record.schema_hash ?? null,
+    toJson(record.raw_input),
+    toJson(record.parsed_input),
+    toJson(record.permissions),
+    toJson(record.granted_permissions),
+    toJson(record.denied_permissions),
+    record.stdout,
+    record.stderr,
+    record.exit_code,
+    toJson(record.output),
+    record.error ?? null,
+    record.started_at,
+    record.finished_at,
+    record.duration_ms,
+  ]);
 }
 
 export async function loadRun(runId: string): Promise<RunRecord | null> {
-  try {
-    const path = `${RUNS_DIR}/${runId}.json`;
-    const text = await Deno.readTextFile(path);
-    return JSON.parse(text) as RunRecord;
-  } catch {
-    return null;
-  }
+  const db = getDb();
+  const row = db.prepare("SELECT * FROM runs WHERE run_id = ?").get([runId]) as
+    | Record<string, unknown>
+    | undefined;
+  if (!row) return null;
+  return rowToRecord(row);
 }
 
 export async function listRuns(): Promise<RunRecord[]> {
-  try {
-    const records: RunRecord[] = [];
-    for await (const entry of Deno.readDir(RUNS_DIR)) {
-      if (entry.isFile && entry.name.endsWith(".json")) {
-        const text = await Deno.readTextFile(`${RUNS_DIR}/${entry.name}`);
-        records.push(JSON.parse(text) as RunRecord);
-      }
-    }
-    return records.sort((a, b) =>
-      new Date(b.started_at).getTime() - new Date(a.started_at).getTime()
-    );
-  } catch {
-    return [];
+  const db = getDb();
+  const rows = db.prepare(
+    "SELECT * FROM runs ORDER BY started_at DESC",
+  ).iter() as Iterable<Record<string, unknown>>;
+  return Array.from(rows).map(rowToRecord);
+}
+
+/**
+ * Find runs that share the same schema hash — potential skill candidates.
+ */
+export async function findClusteredRuns(): Promise<
+  { schema_hash: string; count: number; runs: RunRecord[] }[]
+> {
+  const db = getDb();
+  const groups = db.prepare(
+    `SELECT schema_hash, COUNT(*) as count
+     FROM runs WHERE schema_hash IS NOT NULL
+     GROUP BY schema_hash HAVING count > 1
+     ORDER BY count DESC`,
+  ).all() as { schema_hash: string; count: number }[];
+
+  const result: { schema_hash: string; count: number; runs: RunRecord[] }[] = [];
+  for (const g of groups) {
+    const rows = db.prepare(
+      "SELECT * FROM runs WHERE schema_hash = ? ORDER BY started_at DESC",
+    ).iter([g.schema_hash]) as Iterable<Record<string, unknown>>;
+    result.push({
+      schema_hash: g.schema_hash,
+      count: g.count,
+      runs: Array.from(rows).map(rowToRecord),
+    });
+  }
+  return result;
+}
+
+/**
+ * Find runs that used the same code (same code_hash) — repeated usage clusters.
+ */
+export async function findRepeatedRuns(): Promise<
+  { code_hash: string; count: number; runs: RunRecord[] }[]
+> {
+  const db = getDb();
+  const groups = db.prepare(
+    `SELECT code_hash, COUNT(*) as count
+     FROM runs WHERE code_hash IS NOT NULL
+     GROUP BY code_hash HAVING count > 1
+     ORDER BY count DESC`,
+  ).all() as { code_hash: string; count: number }[];
+
+  const result: { code_hash: string; count: number; runs: RunRecord[] }[] = [];
+  for (const g of groups) {
+    const rows = db.prepare(
+      "SELECT * FROM runs WHERE code_hash = ? ORDER BY started_at DESC",
+    ).iter([g.code_hash]) as Iterable<Record<string, unknown>>;
+    result.push({
+      code_hash: g.code_hash,
+      count: g.count,
+      runs: Array.from(rows).map(rowToRecord),
+    });
+  }
+  return result;
+}
+
+export function closeDb(): void {
+  if (_db) {
+    _db.close();
+    _db = null;
   }
 }
