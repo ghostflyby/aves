@@ -1,11 +1,10 @@
-import {generateBootWrapper} from "./boot.ts";
-import type {ServerPolicy} from "./policy.ts";
-import {resolvePermissions} from "./policy.ts";
-import type {Permissions, RunRecord, RunRequest} from "./types.ts";
+import { generateBootWrapper } from "./boot.ts";
+import type { ServerPolicy } from "./policy.ts";
+import { resolvePermissions } from "./policy.ts";
+import type { Permissions, RunRecord, RunRequest } from "./types.ts";
 
 function buildPermissionFlags(permissions: Permissions): string[] {
   const flags: string[] = [];
-
   if (permissions.read && permissions.read.length > 0) {
     flags.push(`--allow-read=${permissions.read.join(",")}`);
   }
@@ -18,13 +17,9 @@ function buildPermissionFlags(permissions: Permissions): string[] {
   if (permissions.env && permissions.env.length > 0) {
     flags.push(`--allow-env=${permissions.env.join(",")}`);
   }
-
   return flags;
 }
 
-/**
- * Merge two permission sets, deduplicating path lists per key.
- */
 function mergePermissions(base: Permissions, extra: Permissions): Permissions {
   const result: Permissions = {};
   const allKeys = new Set([
@@ -57,8 +52,7 @@ export async function executeRun(
   await Deno.mkdir(runDir, { recursive: true });
 
   // 2. Write boot.ts
-  const bootCode = generateBootWrapper();
-  await Deno.writeTextFile(`${runDir}/boot.ts`, bootCode);
+  await Deno.writeTextFile(`${runDir}/boot.ts`, generateBootWrapper());
 
   // 3. Write user_module.ts
   if (request.mode === "eval" && request.code) {
@@ -82,17 +76,17 @@ export async function executeRun(
   // 5. Resolve permissions through policy
   const userPerms = request.permissions ?? {};
   const policy = options?.policy;
-  const {granted, denied} = resolvePermissions(userPerms, policy);
+  const { granted, denied } = resolvePermissions(userPerms, policy);
 
-  // The boot wrapper needs at minimum read/write access to its own run directory.
-  // Resolve realpath so /tmp and /private/tmp don't confuse the flags.
   const realRunDir = await Deno.realPath(runDir);
-  const runDirPerms: Permissions = {read: [realRunDir], write: [realRunDir]};
+  const runDirPerms: Permissions = {
+    read: [realRunDir],
+    write: [realRunDir],
+  };
 
-  // Merge granted permissions with the run-directory perms.
   const mergedPerms = mergePermissions(granted, runDirPerms);
 
-  // Hard-block run/ffi — strip them even if someone sneaks them in.
+  // Hard-block run/ffi
   const safePerms: Permissions = {};
   for (const [key, paths] of Object.entries(mergedPerms)) {
     if (key !== "run" && key !== "ffi" && paths) {
@@ -102,15 +96,12 @@ export async function executeRun(
 
   const permFlags = buildPermissionFlags(safePerms);
 
-  const args = [
-    "run",
-    "--no-prompt",
-    ...permFlags,
-    "boot.ts",
-  ];
+  const args = ["run", "--no-prompt", ...permFlags, "boot.ts"];
 
   // 6. Compute code hash
-  const codeHash = request.code ? await sha256Hex(request.code) : undefined;
+  const codeHash = request.code
+    ? await sha256Hex(request.code)
+    : undefined;
 
   // 7. Spawn deno
   const cmd = new Deno.Command("deno", {
@@ -146,7 +137,22 @@ export async function executeRun(
     }
   }
 
-  // 9. Cleanup
+  // 9. Read optional parsed_input and schema_hash
+  let parsedInput: Record<string, unknown> | undefined;
+  let schemaHash: string | undefined;
+  try {
+    const text = await Deno.readTextFile(`${runDir}/parsed_input.json`);
+    parsedInput = JSON.parse(text);
+  } catch {
+    // no parsed input (script had no inputSchema)
+  }
+  try {
+    schemaHash = (await Deno.readTextFile(`${runDir}/schema_hash.txt`)).trim();
+  } catch {
+    // no schema hash
+  }
+
+  // 10. Cleanup
   try {
     await Deno.remove(runDir, { recursive: true });
   } catch {
@@ -157,7 +163,9 @@ export async function executeRun(
     run_id: runId,
     mode: request.mode,
     code_hash: codeHash,
+    schema_hash: schemaHash,
     raw_input: request.input,
+    parsed_input: parsedInput,
     permissions: userPerms,
     granted_permissions: granted,
     denied_permissions: denied.length > 0 ? denied : undefined,

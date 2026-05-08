@@ -1,7 +1,14 @@
 /**
  * Generate the boot wrapper script content.
  * The boot wrapper is the real entry point for a sandboxed run.
- * It imports the user module, parses input via Zod, calls main(), and writes output.
+ *
+ * It:
+ * 1. Imports user module (default export + inputSchema)
+ * 2. Reads input.json
+ * 3. If inputSchema exists: parses with Zod,
+ *    writes parsed_input.json + schema_hash.txt
+ * 4. Calls main(input)
+ * 5. Writes output.json
  */
 export function generateBootWrapper(): string {
   return `const userMod = await import("./user_module.ts");
@@ -23,6 +30,23 @@ if (inputSchema) {
     Deno.exit(1);
   }
   input = result.data;
+
+  // Write parsed input for the runner to capture
+  await Deno.writeTextFile(
+    "./parsed_input.json",
+    JSON.stringify(input)
+  );
+
+  // Compute and write schema hash for clustering
+  const schemaJson = JSON.stringify(inputSchema, (_key, value) =>
+    typeof value === "function" ? undefined : value
+  );
+  const _enc = new TextEncoder();
+  const _data = _enc.encode(schemaJson);
+  const _hashBuf = await crypto.subtle.digest("SHA-256", _data);
+  const _hashArr = Array.from(new Uint8Array(_hashBuf));
+  const _hashHex = _hashArr.map((b: number) => b.toString(16).padStart(2, "0")).join("");
+  await Deno.writeTextFile("./schema_hash.txt", _hashHex);
 }
 
 try {
