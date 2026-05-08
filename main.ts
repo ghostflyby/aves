@@ -3,7 +3,6 @@ import { ensureSkillRoots, parseConfig } from "./src/config.ts";
 import {
   acquireLock,
   cleanupAll,
-  findAvailablePort,
   findRunningServer,
   registerEndpoint,
   releaseLock,
@@ -58,11 +57,10 @@ async function cmdServer() {
     Deno.exit(1);
   }
 
-  const port = await findAvailablePort(38440);
   const host = "127.0.0.1";
 
   try {
-    const { port: actualPort } = await startHttpServer(port, host);
+    const { port: actualPort } = await startHttpServer(host);
 
     await registerEndpoint({
       pid: Deno.pid,
