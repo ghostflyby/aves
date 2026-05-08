@@ -10,147 +10,72 @@ import {
 import { executeRun, executeSkillRun } from "../runner.ts";
 import { listRuns, loadRun, saveRun, findClusteredRuns } from "../run-store.ts";
 import { RunRequestSchema } from "../schemas.ts";
-import type {
-  Permissions,
-  RunRequest,
-} from "../types.ts";
 import {
   promoteRunToSkill,
   listSkills,
-  approveSkill,
-  checkSkillApproval,
 } from "../skill.ts";
+import {
+  ReplayRunInputSchema,
+  RunSkillInputSchema,
+  SuggestSkillsInputSchema,
+  PromoteToSkillInputSchema,
+} from "./tool-schemas.ts";
 
 // ============================================================
-// Tool definitions with annotations
+// Tool definitions — inputSchema generated from Zod (single source of truth)
 // ============================================================
 
 const RUN_SCRIPT_TOOL = {
   name: "run_script",
   description: "Execute a script in sandboxed Deno",
   inputSchema: RunRequestSchema.toJSONSchema(),
-  annotations: {
-    destructiveHint: true,
-  },
+  annotations: { destructiveHint: true },
 };
 
 const REPLAY_RUN_TOOL = {
   name: "replay_run",
   description: "Replay a previous run by ID",
-  inputSchema: {
-    type: "object" as const,
-    properties: {
-      run_id: { type: "string" as const, description: "Run ID to replay" },
-    },
-    required: ["run_id"],
-  },
-  annotations: {
-    readOnlyHint: true,
-  },
+  inputSchema: ReplayRunInputSchema.toJSONSchema(),
+  annotations: { readOnlyHint: true },
 };
 
 const LIST_RUNS_TOOL = {
   name: "list_runs",
   description: "List recent run records",
-  inputSchema: {
-    type: "object" as const,
-    properties: {},
-  },
-  annotations: {
-    readOnlyHint: true,
-  },
+  inputSchema: { type: "object" as const, properties: {} },
+  annotations: { readOnlyHint: true },
 };
 
 const RUN_SKILL_TOOL = {
   name: "run_skill",
   description: "Execute a skill by its directory path",
-  inputSchema: {
-    type: "object" as const,
-    properties: {
-      skill_path: {
-        type: "string" as const,
-        description: "Path to the skill directory",
-      },
-      input: {
-        type: "object" as const,
-        description: "Input arguments for the skill",
-        additionalProperties: {},
-      },
-      permissions: {
-        type: "object" as const,
-        description: "Permission overrides (can only shrink)",
-        properties: {
-          read: { type: "array" as const, items: { type: "string" as const } },
-          write: { type: "array" as const, items: { type: "string" as const } },
-          net: { type: "array" as const, items: { type: "string" as const } },
-          env: { type: "array" as const, items: { type: "string" as const } },
-        },
-      },
-    },
-    required: ["skill_path"],
-  },
-  annotations: {
-    destructiveHint: true,
-  },
+  inputSchema: RunSkillInputSchema.toJSONSchema(),
+  annotations: { destructiveHint: true },
 };
 
 const SUGGEST_SKILLS_TOOL = {
   name: "suggest_skills",
   description: "Find run clusters that look like skill candidates",
-  inputSchema: {
-    type: "object" as const,
-    properties: {
-      min_runs: {
-        type: "number" as const,
-        description: "Minimum runs to consider a cluster (default: 2)",
-      },
-    },
-  },
-  annotations: {
-    readOnlyHint: true,
-  },
+  inputSchema: SuggestSkillsInputSchema.toJSONSchema(),
+  annotations: { readOnlyHint: true },
 };
 
 const PROMOTE_TO_SKILL_TOOL = {
   name: "promote_to_skill",
   description: "Promote a run to a skill, writing to disk",
-  inputSchema: {
-    type: "object" as const,
-    properties: {
-      run_id: {
-        type: "string" as const,
-        description: "Run ID to promote",
-      },
-      name: {
-        type: "string" as const,
-        description:
-          "Skill name (used as directory name, must match [a-z][a-z0-9_-])",
-      },
-      description: {
-        type: "string" as const,
-        description: "Human-readable skill description",
-      },
-    },
-    required: ["run_id", "name", "description"],
-  },
-  annotations: {
-    destructiveHint: true,
-  },
+  inputSchema: PromoteToSkillInputSchema.toJSONSchema(),
+  annotations: { destructiveHint: true },
 };
+
 const LIST_SKILLS_TOOL = {
   name: "list_skills",
   description: "List all discovered skills in configured roots",
-  inputSchema: {
-    type: "object" as const,
-    properties: {},
-  },
-  annotations: {
-    readOnlyHint: true,
-  },
+  inputSchema: { type: "object" as const, properties: {} },
+  annotations: { readOnlyHint: true },
 };
 
 // ============================================================
-// Request handlers
+// Request handlers — all input validated with Zod .safeParse()
 // ============================================================
 
 async function handleRunScript(args: Record<string, unknown>) {
@@ -163,61 +88,72 @@ async function handleRunScript(args: Record<string, unknown>) {
     );
   }
 
-  const request: RunRequest = result.data;
-  const record = await executeRun(request);
+  const record = await executeRun(result.data);
   await saveRun(record);
-  return {
-    content: [{ type: "text", text: JSON.stringify(record, null, 2) }],
-  };
+  return { content: [{ type: "text", text: JSON.stringify(record, null, 2) }] };
 }
 
-async function handleRunSkill(args: Record<string, unknown>) {
-  const skillPath = args.skill_path as string | undefined;
-  if (!skillPath) {
-    throw new McpError(ErrorCode.InvalidParams, 'skill_path is required');
-  }
-  const input = (args.input ?? {}) as Record<string, unknown>;
-  const permOverride = args.permissions as Permissions | undefined;
-  const result = await executeSkillRun(skillPath, input, {
-    permissionsOverride: permOverride,
-  });
-  if (!result.record) {
+async function handleReplayRun(args: Record<string, unknown>) {
+  const parsed = ReplayRunInputSchema.safeParse(args);
+  if (!parsed.success) {
     throw new McpError(
-      ErrorCode.InternalError,
-      'Skill execution failed: no record returned',
+      ErrorCode.InvalidParams,
+      parsed.error.issues.map((i) => i.message).join("; "),
     );
   }
-  await saveRun(result.record);
-  return {
-    content: [{ type: "text", text: JSON.stringify(result.record, null, 2) }],
-  };
-}
-async function handleReplayRun(args: Record<string, unknown>) {
-  const runId = args.run_id as string | undefined;
-  if (!runId) {
-    throw new McpError(ErrorCode.InvalidParams, "run_id is required");
-  }
 
-  const record = await loadRun(runId);
+  const record = await loadRun(parsed.data.run_id);
   if (!record) {
-    throw new McpError(ErrorCode.InvalidParams, `Run not found: ${runId}`);
+    throw new McpError(
+      ErrorCode.InvalidParams,
+      `Run not found: ${parsed.data.run_id}`,
+    );
   }
 
-  return {
-    content: [{ type: "text", text: JSON.stringify(record, null, 2) }],
-  };
+  return { content: [{ type: "text", text: JSON.stringify(record, null, 2) }] };
 }
 
 async function handleListRuns() {
   const records = await listRuns();
-  return {
-    content: [{ type: "text", text: JSON.stringify(records, null, 2) }],
-  };
+  return { content: [{ type: "text", text: JSON.stringify(records, null, 2) }] };
+}
+
+async function handleRunSkill(args: Record<string, unknown>) {
+  const parsed = RunSkillInputSchema.safeParse(args);
+  if (!parsed.success) {
+    throw new McpError(
+      ErrorCode.InvalidParams,
+      parsed.error.issues.map((i) => i.message).join("; "),
+    );
+  }
+
+  const { skill_path, input, permissions } = parsed.data;
+  const result = await executeSkillRun(skill_path, input ?? {}, {
+    permissionsOverride: permissions,
+  });
+
+  if (!result.record) {
+    throw new McpError(
+      ErrorCode.InternalError,
+      "Skill execution failed: no record returned",
+    );
+  }
+
+  await saveRun(result.record);
+  return { content: [{ type: "text", text: JSON.stringify(result.record, null, 2) }] };
 }
 
 async function handleSuggestSkills(args: Record<string, unknown>) {
+  const parsed = SuggestSkillsInputSchema.safeParse(args);
+  if (!parsed.success) {
+    throw new McpError(
+      ErrorCode.InvalidParams,
+      parsed.error.issues.map((i) => i.message).join("; "),
+    );
+  }
+
   const clusters = await findClusteredRuns();
-  const minRuns = (args.min_runs as number) ?? 2;
+  const minRuns = parsed.data.min_runs;
   const filtered = clusters.filter((c) => c.count >= minRuns);
 
   const suggestions = filtered.map((c) => ({
@@ -238,13 +174,18 @@ async function handleSuggestSkills(args: Record<string, unknown>) {
 }
 
 async function handlePromoteToSkill(args: Record<string, unknown>) {
-  const runId = args.run_id as string;
-  const name = args.name as string;
-  const description = args.description as string;
+  const parsed = PromoteToSkillInputSchema.safeParse(args);
+  if (!parsed.success) {
+    throw new McpError(
+      ErrorCode.InvalidParams,
+      parsed.error.issues.map((i) => i.message).join("; "),
+    );
+  }
 
-  const run = await loadRun(runId);
+  const { run_id, name, description } = parsed.data;
+  const run = await loadRun(run_id);
   if (!run) {
-    throw new McpError(ErrorCode.InvalidParams, `Run not found: ${runId}`);
+    throw new McpError(ErrorCode.InvalidParams, `Run not found: ${run_id}`);
   }
 
   const result = await promoteRunToSkill(run, name, description);
@@ -252,22 +193,12 @@ async function handlePromoteToSkill(args: Record<string, unknown>) {
     throw new McpError(ErrorCode.InvalidParams, result.error);
   }
 
-  return {
-    content: [{
-      type: "text",
-      text: JSON.stringify(result, null, 2),
-    }],
-  };
+  return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
 }
 
 async function handleListSkills() {
   const skills = await listSkills();
-  return {
-    content: [{
-      type: "text",
-      text: JSON.stringify({ skills }, null, 2),
-    }],
-  };
+  return { content: [{ type: "text", text: JSON.stringify({ skills }, null, 2) }] };
 }
 
 // ============================================================
@@ -280,11 +211,7 @@ export async function startServer() {
       name: "aves-mcp",
       version: "0.1.0",
     },
-    {
-      capabilities: {
-        tools: {},
-      },
-    },
+    { capabilities: { tools: {} } },
   );
 
   server.setRequestHandler(ListToolsRequestSchema, () => ({
