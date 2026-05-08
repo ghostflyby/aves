@@ -9,14 +9,14 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { executeRun } from "../runner.ts";
 import { listRuns, loadRun, saveRun } from "../run-store.ts";
-import { RunRequestBaseSchema, RunRequestSchema } from "../schemas.ts";
+import { RunRequestSchema } from "../schemas.ts";
 import type { RunRequest } from "../types.ts";
 
 // Tool input schemas generated from Zod — single source of truth
 const RUN_SCRIPT_TOOL = {
   name: "run_script",
   description: "Execute a script in sandboxed Deno",
-  inputSchema: RunRequestBaseSchema.toJSONSchema(),
+  inputSchema: RunRequestSchema.toJSONSchema(),
 };
 
 const REPLAY_RUN_TOOL = {

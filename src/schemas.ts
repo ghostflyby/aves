@@ -13,23 +13,35 @@ export const PermissionsSchema = z.object({
   env: z.array(z.string()).optional(),
 });
 
-// Base without refine — used for JSON Schema generation
-export const RunRequestBaseSchema = z.object({
-  mode: ScriptModeSchema,
+const EvalRunRequestSchema = z.object({
+  mode: z.literal("eval"),
+  code: z.string(),
+  modulePath: z.string().optional(),
+  input: z.record(z.string(), z.unknown()).optional(),
+  permissions: PermissionsSchema.optional(),
+});
+
+const ModuleRunRequestSchema = z.object({
+  mode: z.literal("module"),
+  code: z.string().optional(),
+  modulePath: z.string(),
+  input: z.record(z.string(), z.unknown()).optional(),
+  permissions: PermissionsSchema.optional(),
+});
+
+const SkillRunRequestSchema = z.object({
+  mode: z.literal("skill"),
   code: z.string().optional(),
   modulePath: z.string().optional(),
   input: z.record(z.string(), z.unknown()).optional(),
   permissions: PermissionsSchema.optional(),
 });
 
-export const RunRequestSchema = RunRequestBaseSchema.refine(
-  (data) => {
-    if (data.mode === "eval") return !!data.code;
-    if (data.mode === "module") return !!data.modulePath;
-    return true;
-  },
-  { message: "eval mode requires code, module mode requires modulePath" },
-);
+export const RunRequestSchema = z.discriminatedUnion("mode", [
+  EvalRunRequestSchema,
+  ModuleRunRequestSchema,
+  SkillRunRequestSchema,
+]);
 
 export const RunRecordSchema = z.object({
   run_id: z.string(),
