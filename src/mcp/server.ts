@@ -130,21 +130,6 @@ const PROMOTE_TO_SKILL_TOOL = {
         type: "string" as const,
         description: "Human-readable skill description",
       },
-      install_path: {
-        type: "string" as const,
-        description:
-          "Optional Codex skill install path (default: ~/.codex/skills/deno-<name>)",
-      },
-      install_method: {
-        type: "string" as const,
-        enum: ["symlink", "copy"],
-        description:
-          "Install method for Codex skill entry (default: symlink)",
-      },
-      entrypoint_content: {
-        type: "string" as const,
-        description: "Optional mod.ts source code override",
-      },
     },
     required: ["run_id", "name", "description"],
   },
@@ -152,7 +137,6 @@ const PROMOTE_TO_SKILL_TOOL = {
     destructiveHint: true,
   },
 };
-
 const LIST_SKILLS_TOOL = {
   name: "list_skills",
   description: "List all discovered skills in configured roots",
@@ -302,12 +286,7 @@ async function handlePromoteToSkill(args: Record<string, unknown>) {
     throw new McpError(ErrorCode.InvalidParams, `Run not found: ${runId}`);
   }
 
-  const options: Record<string, unknown> = {};
-  if (args.install_path) options.installPath = args.install_path;
-  if (args.install_method) options.installMethod = args.install_method;
-  if (args.entrypoint_content) options.entrypointContent = args.entrypoint_content;
-
-  const result = await promoteRunToSkill(run, name, description, options as any);
+  const result = await promoteRunToSkill(run, name, description);
   if (!result.ok) {
     throw new McpError(ErrorCode.InvalidParams, result.error);
   }

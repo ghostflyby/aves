@@ -6,7 +6,6 @@ import {
   loadSkillManifest,
   promoteRunToSkill,
   listSkills,
-  generateSkillMarkdown,
 } from "./skill.ts";
 import { saveSkillApproval, loadSkillApproval, removeSkillApproval } from "./run-store.ts";
 import type { RunRecord, SkillManifest } from "./types.ts";
@@ -58,6 +57,8 @@ Deno.test("validateManifest - valid manifest", () => {
   const result = validateManifest({
     name: "test_skill",
     description: "A test skill",
+    entrypoint: "./mod.ts",
+    requires_approval: true,
     permissions: { net: ["api.github.com"] },
   });
   assertEquals(result.ok, true);
@@ -72,6 +73,8 @@ Deno.test("validateManifest - name can have hyphens", () => {
   const result = validateManifest({
     name: "github-issue-fetch",
     description: "Fetch GitHub issues",
+    entrypoint: "./mod.ts",
+    requires_approval: true,
     permissions: {},
   });
   assertEquals(result.ok, true);
@@ -89,6 +92,8 @@ Deno.test("hashManifest - deterministic", async () => {
   const manifest: SkillManifest = {
     name: "test",
     description: "desc",
+    entrypoint: "./mod.ts",
+    requires_approval: true,
     permissions: { net: ["api.github.com"] },
   };
   const h1 = await hashManifest(manifest);
@@ -98,25 +103,13 @@ Deno.test("hashManifest - deterministic", async () => {
 });
 
 Deno.test("hashManifest - different perms yield different hashes", async () => {
-  const m1: SkillManifest = { name: "t", description: "d", permissions: {} };
-  const m2: SkillManifest = { name: "t", description: "d", permissions: { net: ["x"] } };
+  const m1: SkillManifest = { name: "t", description: "d", permissions: {}, entrypoint: "./mod.ts", requires_approval: true };
+  const m2: SkillManifest = { name: "t", description: "d", permissions: { net: ["x"] }, entrypoint: "./mod.ts", requires_approval: true };
   const h1 = await hashManifest(m1);
   const h2 = await hashManifest(m2);
   assertEquals(h1 !== h2, true);
 });
 
-Deno.test("generateSkillMarkdown - contains usage instructions", () => {
-  const manifest: SkillManifest = {
-    name: "test_skill",
-    description: "A test skill",
-    permissions: { net: ["api.github.com"] },
-  };
-  const md = generateSkillMarkdown(manifest, "/tmp/aves/skills/test_skill");
-  assertStringIncludes(md, "# test_skill");
-  assertStringIncludes(md, "A test skill");
-  assertStringIncludes(md, "run_skill");
-  assertStringIncludes(md, "/tmp/aves/skills/test_skill");
-});
 
 // ============================================================
 // Skill disk storage tests

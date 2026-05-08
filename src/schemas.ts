@@ -79,11 +79,6 @@ export const SkillManifestSchema = z.object({
   examples: z.array(z.unknown()).optional(),
 });
 
-export const SkillInstallOptionsSchema = z.object({
-  installPath: z.string().optional(),
-  installMethod: z.enum(["symlink", "copy"]).default("symlink"),
-});
-
 // ============================================================
 // Inferred TypeScript types
 // ============================================================
@@ -93,4 +88,3 @@ export type Permissions = z.infer<typeof PermissionsSchema>;
 export type RunRequest = z.infer<typeof RunRequestSchema>;
 export type RunRecord = z.infer<typeof RunRecordSchema>;
 export type SkillManifest = z.infer<typeof SkillManifestSchema>;
-export type SkillInstallOptions = z.infer<typeof SkillInstallOptionsSchema>;

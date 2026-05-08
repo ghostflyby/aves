@@ -1,9 +1,5 @@
 import { SkillManifestSchema } from "./schemas.ts";
-import type {
-  RunRecord,
-  SkillInstallOptions,
-  SkillManifest,
-} from "./types.ts";
+import type { Permissions, RunRecord, SkillManifest } from "./types.ts";
 import { resolvePermissions } from "./policy.ts";
 import { saveRun, saveSkillApproval, loadSkillApproval } from "./run-store.ts";
 import {
@@ -36,12 +32,11 @@ export function validateManifest(
 }
 
 /**
- * Compute an SHA-256 hash of the manifest (canonical JSON).
+ * Compute an SHA-256 hash of the manifest using stable JSON serialization.
  */
 export async function hashManifest(
   manifest: SkillManifest,
 ): Promise<string> {
-  // Recursive stable JSON serialization
   function stableStringify(val: unknown): string {
     if (val === null) return "null";
     if (typeof val !== "object" || Array.isArray(val)) {
@@ -128,7 +123,6 @@ export async function listSkills(): Promise<SkillInfo[]> {
         }
       }
     } catch {
-      // Skip unreadable roots
       continue;
     }
   }
@@ -137,131 +131,25 @@ export async function listSkills(): Promise<SkillInfo[]> {
 }
 
 // ============================================================
-// Markdown generation for Codex skills
-// ============================================================
-
-/**
- * Generate SKILL.md content for a Codex-compatible skill entry.
- */
-export function generateSkillMarkdown(
-  manifest: SkillManifest,
-  skillDir: string,
-): string {
-  const lines: string[] = [
-    `# ${manifest.name}`,
-    "",
-    `${manifest.description}`,
-    "",
-    "This skill is managed by the **Aves** runtime.",
-    "",
-    "## Usage",
-    "",
-    `Call the \`run_skill\` tool from the aves MCP server:`,
-    `- \`skill_path\`: \`${skillDir}\``,
-    "",
-  ];
-
-  if (manifest.input_schema) {
-    lines.push("## Input Schema", "");
-    lines.push("```json");
-    lines.push(JSON.stringify(manifest.input_schema, null, 2));
-    lines.push("```", "");
-  }
-
-  lines.push("## Permissions", "");
-  lines.push("```json");
-  lines.push(JSON.stringify(manifest.permissions, null, 2));
-  lines.push("```", "");
-
-  if (manifest.examples && manifest.examples.length > 0) {
-    lines.push("## Examples", "");
-    for (let i = 0; i < Math.min(manifest.examples.length, 3); i++) {
-      lines.push("### Example " + (i + 1), "");
-      lines.push("```json");
-      lines.push(JSON.stringify(manifest.examples[i], null, 2));
-      lines.push("```", "");
-    }
-  }
-
-  return lines.join("\n");
-}
-
-// ============================================================
-// Codex skill installation
-// ============================================================
-
-/**
- * Install a skill as a Codex-compatible skill entry.
- * Creates a directory with SKILL.md and symlinks/copies skill.json.
- */
-export async function installCodexSkill(
-  skillDir: string,
-  manifest: SkillManifest,
-  options: SkillInstallOptions,
-): Promise<string> {
-  const installPath = options.installPath ??
-    `${Deno.env.get("HOME") ?? ""}/.codex/skills/deno-${manifest.name}`;
-
-  // Create the install directory
-  await Deno.mkdir(installPath, { recursive: true });
-
-  // Write SKILL.md
-  const markdown = generateSkillMarkdown(manifest, skillDir);
-  await Deno.writeTextFile(`${installPath}/SKILL.md`, markdown);
-
-  if (options.installMethod === "symlink") {
-    // Symlink skill.json back to aves root
-    try {
-      await Deno.remove(`${installPath}/skill.json`);
-    } catch {
-      /* ignore */
-    }
-    await Deno.symlink(
-      `${skillDir}/skill.json`,
-      `${installPath}/skill.json`,
-    );
-
-    // Symlink mod.ts
-    try {
-      await Deno.remove(`${installPath}/mod.ts`);
-    } catch {
-      /* ignore */
-    }
-    await Deno.symlink(
-      resolveSkillEntrypoint(skillDir, manifest),
-      `${installPath}/mod.ts`,
-    );
-  } else {
-    // Copy files
-    const entrypoint = resolveSkillEntrypoint(skillDir, manifest);
-    await Deno.copyFile(`${skillDir}/skill.json`, `${installPath}/skill.json`);
-    await Deno.copyFile(entrypoint, `${installPath}/mod.ts`);
-  }
-
-  return installPath;
-}
-
-// ============================================================
 // Promotion (run → skill)
 // ============================================================
 
 /**
  * Promote a run record to a skill, writing to disk.
- * Optionally installs as a Codex skill entry.
+ * Returns the skill directory path.
  */
 export async function promoteRunToSkill(
   run: RunRecord,
   name: string,
   description: string,
-  options?: SkillInstallOptions & {
+  options?: {
     entrypointContent?: string;
     skipIfExists?: boolean;
   },
 ): Promise<
-  { ok: true; skillDir: string; installPath?: string }
+  { ok: true; skillDir: string }
   | { ok: false; error: string }
 > {
-  // Validate name
   if (!name.match(/^[a-z][a-z0-9_-]*$/)) {
     return {
       ok: false,
@@ -269,7 +157,6 @@ export async function promoteRunToSkill(
     };
   }
 
-  // Need schema_hash (means the run used an inputSchema)
   if (!run.schema_hash) {
     return {
       ok: false,
@@ -278,7 +165,6 @@ export async function promoteRunToSkill(
     };
   }
 
-  // Validate permissions are safe
   const { denied } = resolvePermissions(run.granted_permissions);
   if (denied.length > 0) {
     return {
@@ -287,7 +173,6 @@ export async function promoteRunToSkill(
     };
   }
 
-  // Build manifest
   const manifest: SkillManifest = {
     name,
     description,
@@ -305,12 +190,10 @@ export async function promoteRunToSkill(
   const validation = validateManifest(manifest);
   if (!validation.ok) return validation;
 
-  // Ensure skill roots exist
   await ensureSkillRoots();
   const skillRoot = await getWritableSkillRoot();
   const skillDir = `${skillRoot}/${name}`;
 
-  // Check if already exists
   if (options?.skipIfExists) {
     try {
       await Deno.stat(`${skillDir}/skill.json`);
@@ -320,29 +203,23 @@ export async function promoteRunToSkill(
     }
   }
 
-  // Create skill directory
   await Deno.mkdir(skillDir, { recursive: true });
 
-  // Write skill.json
   await Deno.writeTextFile(
     `${skillDir}/skill.json`,
     JSON.stringify(manifest, null, 2),
   );
 
-  // Write mod.ts
   const entrypointContent = options?.entrypointContent ?? `
 // Skill: ${name}
 // Description: ${description}
-// Generated by Aves from run ${run.run_id}
 
 export default async function main(input: unknown) {
-  // TODO: implement skill logic
   return { ok: true, message: "Skill stub — replace with actual implementation" };
 }
 `;
   await Deno.writeTextFile(`${skillDir}/mod.ts`, entrypointContent.trimStart());
 
-  // Write examples.json
   if (manifest.examples && manifest.examples.length > 0) {
     await Deno.writeTextFile(
       `${skillDir}/examples.json`,
@@ -350,20 +227,10 @@ export default async function main(input: unknown) {
     );
   }
 
-  // Update run record
   run.promoted_to_skill = skillDir;
   await saveRun(run);
 
-  // Optional Codex skill installation
-  let installPath: string | undefined;
-  if (options?.installPath || options?.installMethod) {
-    installPath = await installCodexSkill(skillDir, manifest, {
-      installPath: options.installPath,
-      installMethod: options.installMethod ?? "symlink",
-    });
-  }
-
-  return { ok: true, skillDir, installPath };
+  return { ok: true, skillDir };
 }
 
 // ============================================================
@@ -388,20 +255,15 @@ export async function checkSkillApproval(
 
   const manifest = manifestResult.manifest;
   const mHash = await hashManifest(manifest);
-
   const existing = await loadSkillApproval(skillDir);
 
-  // If requires_approval is false and hash matches → approved
   if (!manifest.requires_approval && existing?.manifestHash === mHash) {
     return { status: "approved" };
   }
-
-  // If already approved with matching hash → approved
   if (existing?.manifestHash === mHash) {
     return { status: "approved" };
   }
 
-  // Needs approval
   return {
     status: "need_approval",
     skillPath: skillDir,
@@ -421,7 +283,6 @@ export async function approveSkill(
   }
 
   const mHash = await hashManifest(manifestResult.manifest);
-
   await saveSkillApproval({
     skillPath: skillDir,
     manifestHash: mHash,

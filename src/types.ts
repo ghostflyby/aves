@@ -5,7 +5,6 @@ export type {
   RunRecord,
   RunRequest,
   ScriptMode,
-  SkillInstallOptions,
   SkillManifest,
 } from "./schemas.ts";
 export {
@@ -13,6 +12,5 @@ export {
   RunRecordSchema,
   RunRequestSchema,
   ScriptModeSchema,
-  SkillInstallOptionsSchema,
   SkillManifestSchema,
 } from "./schemas.ts";
