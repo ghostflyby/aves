@@ -9,56 +9,27 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { executeRun } from "../runner.ts";
 import { listRuns, loadRun, saveRun } from "../run-store.ts";
-import type { RunRequest, ScriptMode } from "../types.ts";
+import {
+  RunRequestBaseSchema,
+  RunRequestSchema,
+  zodToJsonSchema,
+} from "../schemas.ts";
+import type { RunRequest } from "../types.ts";
 
+// Tool input schemas generated from Zod — single source of truth
 const RUN_SCRIPT_TOOL = {
   name: "run_script",
   description: "Execute a script in sandboxed Deno",
-  inputSchema: {
-    type: "object",
-    properties: {
-      mode: {
-        type: "string",
-        enum: ["eval", "module", "skill"],
-        description: "Execution mode",
-      },
-      code: {
-        type: "string",
-        description: "Script code to execute (for eval mode)",
-      },
-      modulePath: {
-        type: "string",
-        description: "Path to module file (for module mode)",
-      },
-      input: {
-        type: "object",
-        description: "Input data passed to the script",
-      },
-      permissions: {
-        type: "object",
-        properties: {
-          read: { type: "array", items: { type: "string" } },
-          write: { type: "array", items: { type: "string" } },
-          net: { type: "array", items: { type: "string" } },
-          env: { type: "array", items: { type: "string" } },
-        },
-        description: "Permission overrides",
-      },
-    },
-    required: ["mode"],
-  },
+  inputSchema: zodToJsonSchema(RunRequestBaseSchema),
 };
 
 const REPLAY_RUN_TOOL = {
   name: "replay_run",
   description: "Replay a previous run by ID",
   inputSchema: {
-    type: "object",
+    type: "object" as const,
     properties: {
-      run_id: {
-        type: "string",
-        description: "Run ID to replay",
-      },
+      run_id: { type: "string" as const, description: "Run ID to replay" },
     },
     required: ["run_id"],
   },
@@ -68,41 +39,22 @@ const LIST_RUNS_TOOL = {
   name: "list_runs",
   description: "List recent run records",
   inputSchema: {
-    type: "object",
+    type: "object" as const,
     properties: {},
   },
 };
 
 async function handleRunScript(args: Record<string, unknown>) {
-  const mode = args.mode as ScriptMode | undefined;
-  if (!mode || !["eval", "module", "skill"].includes(mode)) {
+  // Validate with the refined Zod schema
+  const result = RunRequestSchema.safeParse(args);
+  if (!result.success) {
     throw new McpError(
       ErrorCode.InvalidParams,
-      `Invalid or missing mode: ${mode}. Must be one of: eval, module, skill`,
+      result.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; "),
     );
   }
 
-  const request: RunRequest = {
-    mode,
-    code: args.code as string | undefined,
-    modulePath: args.modulePath as string | undefined,
-    input: args.input as Record<string, unknown> | undefined,
-    permissions: args.permissions as RunRequest["permissions"],
-  };
-
-  if (mode === "eval" && !request.code) {
-    throw new McpError(
-      ErrorCode.InvalidParams,
-      "code is required for eval mode",
-    );
-  }
-  if (mode === "module" && !request.modulePath) {
-    throw new McpError(
-      ErrorCode.InvalidParams,
-      "modulePath is required for module mode",
-    );
-  }
-
+  const request: RunRequest = result.data;
   const record = await executeRun(request);
   await saveRun(record);
   return {
@@ -156,15 +108,12 @@ export async function startServer() {
       const { name, arguments: args } = request.params;
 
       switch (name) {
-        case "run_script": {
+        case "run_script":
           return await handleRunScript(args ?? {});
-        }
-        case "replay_run": {
+        case "replay_run":
           return await handleReplayRun(args ?? {});
-        }
-        case "list_runs": {
+        case "list_runs":
           return await handleListRuns();
-        }
         default:
           throw new McpError(
             ErrorCode.MethodNotFound,
