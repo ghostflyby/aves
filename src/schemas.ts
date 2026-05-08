@@ -1,4 +1,4 @@
-import { z } from "zod";
+import {z} from "zod";
 
 // ============================================================
 // Zod schemas — the primary contract system for Aves
@@ -29,19 +29,9 @@ const ModuleRunRequestSchema = z.object({
   permissions: PermissionsSchema.optional(),
 });
 
-const SkillRunRequestSchema = z.object({
-  mode: z.literal("skill"),
-  code: z.string().optional(),
-  modulePath: z.string().optional(),
-  skillPath: z.string().optional(),
-  input: z.record(z.string(), z.unknown()).optional(),
-  permissions: PermissionsSchema.optional(),
-});
-
 export const RunRequestSchema = z.discriminatedUnion("mode", [
   EvalRunRequestSchema,
   ModuleRunRequestSchema,
-  SkillRunRequestSchema,
 ]);
 
 export const RunRecordSchema = z.object({

@@ -258,10 +258,8 @@ export async function executeRun(
     };
   }
 
-  if (!request.modulePath && request.mode !== "skill") {
-    throw new Error(
-      `Invalid request: mode=${request.mode}, code or modulePath missing`,
-    );
+  if (request.mode === "eval" && !request.code) {
+    throw new Error("Invalid request: eval mode requires 'code'");
   }
 
   const modulePath = request.modulePath
