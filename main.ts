@@ -1,6 +1,7 @@
 import { executeRun } from "./src/runner.ts";
 import { loadRun, saveRun } from "./src/run-store.ts";
 import type { RunRequest } from "./src/types.ts";
+import {startServer} from "./src/mcp/server.ts";
 
 async function cmdRun(args: string[]) {
   const filePath = args[0];
@@ -51,7 +52,6 @@ if (import.meta.main) {
       break;
     case "serve":
     case "stdio":
-      const { startServer } = await import("./src/mcp/server.ts");
       await startServer();
       break;
     default:

@@ -1,7 +1,8 @@
-import { generateBootWrapper } from "./boot.ts";
 import type { ServerPolicy } from "./policy.ts";
 import { resolvePermissions } from "./policy.ts";
 import type { Permissions, RunRecord, RunRequest } from "./types.ts";
+
+const BOOT_PATH = new URL("./boot.ts", import.meta.url).pathname;
 
 function buildPermissionFlags(permissions: Permissions): string[] {
   const flags: string[] = [];
@@ -44,48 +45,39 @@ export async function executeRun(
   const startedAt = new Date();
   const startedAtStr = startedAt.toISOString();
 
-  // 1. Create run directory
   await Deno.mkdir(runDir, { recursive: true });
 
-  // 2. Write boot.ts
-  await Deno.writeTextFile(`${runDir}/boot.ts`, generateBootWrapper());
+  // Module resolution
+  const isEval = request.mode === "eval" && !!request.code;
 
-  // 3. Resolve the module path for the child process
-  let moduleArg: string;
-  let moduleReadPaths: string[] = [];
-
-  if (request.mode === "eval" && request.code) {
-    // Eval: write code to temp file, pass relative path
-    await Deno.writeTextFile(`${runDir}/user_module.ts`, request.code);
-    moduleArg = "./user_module.ts";
-  } else if (request.mode === "module" && request.modulePath) {
-    // Module: use the actual filesystem path directly
-    moduleArg = await Deno.realPath(request.modulePath);
-    moduleReadPaths = [moduleArg];
-  } else {
+  if (isEval) {
+    await Deno.writeTextFile(`${runDir}/user_module.ts`, request.code!);
+  } else if (!request.modulePath) {
     throw new Error(
       `Invalid request: mode=${request.mode}, code or modulePath missing`,
     );
   }
 
-  // 4. Write input.json
-  const inputData = request.input ?? {};
-  await Deno.writeTextFile(`${runDir}/input.json`, JSON.stringify(inputData));
+  await Deno.writeTextFile(`${runDir}/input.json`, JSON.stringify(request.input ?? {}));
 
-  // 5. Resolve permissions
+  // Resolve absolute paths
+  const realRunDir = await Deno.realPath(runDir);
+  const moduleArg = isEval
+    ? `${realRunDir}/user_module.ts`
+    : await Deno.realPath(request.modulePath!);
+  const moduleReadPaths = isEval ? [] : [moduleArg];
+
+  // Permissions
   const userPerms = request.permissions ?? {};
   const policy = options?.policy;
   const { granted, denied } = resolvePermissions(userPerms, policy);
 
-  const realRunDir = await Deno.realPath(runDir);
   const runDirPerms: Permissions = {
-    read: [realRunDir, ...moduleReadPaths],
+    read: [realRunDir, BOOT_PATH, ...moduleReadPaths],
     write: [realRunDir],
   };
 
   const mergedPerms = mergePermissions(granted, runDirPerms);
-
-  // Hard-block run/ffi
   const safePerms: Permissions = {};
   for (const [key, paths] of Object.entries(mergedPerms)) {
     if (key !== "run" && key !== "ffi" && paths) {
@@ -95,20 +87,12 @@ export async function executeRun(
 
   const permFlags = buildPermissionFlags(safePerms);
 
-  // 6. Build args: boot.ts <module-path>
-  const args = ["run", "--no-prompt", ...permFlags, "boot.ts", moduleArg];
+  // Spawn
+  const args = ["run", "--no-prompt", ...permFlags, BOOT_PATH, moduleArg];
+  const codeHash = request.code ? await sha256Hex(request.code) : undefined;
 
-  // 7. Compute code hash
-  const codeHash = request.code
-    ? await sha256Hex(request.code)
-    : undefined;
-
-  // 8. Spawn deno
   const cmd = new Deno.Command("deno", {
-    args,
-    cwd: runDir,
-    stdout: "piped",
-    stderr: "piped",
+    args, cwd: runDir, stdout: "piped", stderr: "piped",
   });
 
   const proc = cmd.outputSync();
@@ -120,62 +104,43 @@ export async function executeRun(
   const stderr = new TextDecoder().decode(proc.stderr);
   const exitCode = proc.code;
 
-  // 9. Read output
+  // Read output
   let output: unknown = null;
   let error: string | undefined;
   try {
-    const outputText = await Deno.readTextFile(`${runDir}/output.json`);
+    const outputText = await Deno.readTextFile(`${realRunDir}/output.json`);
     const parsed = JSON.parse(outputText);
-    if (parsed.ok) {
-      output = parsed.data;
-    } else {
-      error = parsed.error;
-    }
+    if (parsed.ok) output = parsed.data;
+    else error = parsed.error;
   } catch {
-    if (exitCode !== 0 && !error) {
-      error = stderr || "Process exited with non-zero code";
-    }
+    if (exitCode !== 0 && !error) error = stderr || "Process exited with non-zero code";
   }
 
-  // 10. Read optional parsed_input and schema_hash
+  // Read optional metadata
   let parsedInput: Record<string, unknown> | undefined;
   let schemaHash: string | undefined;
   try {
-    const text = await Deno.readTextFile(`${runDir}/parsed_input.json`);
-    parsedInput = JSON.parse(text);
-  } catch { /* no parsed input */ }
+    parsedInput = JSON.parse(await Deno.readTextFile(`${realRunDir}/parsed_input.json`));
+  } catch { /* no-op */ }
   try {
-    schemaHash = (await Deno.readTextFile(`${runDir}/schema_hash.txt`)).trim();
-  } catch { /* no schema hash */ }
+    schemaHash = (await Deno.readTextFile(`${realRunDir}/schema_hash.txt`)).trim();
+  } catch { /* no-op */ }
 
-  // 11. Cleanup
+  // Cleanup
   try { await Deno.remove(runDir, { recursive: true }); } catch { /* best-effort */ }
 
   return {
-    run_id: runId,
-    mode: request.mode,
-    code_hash: codeHash,
-    schema_hash: schemaHash,
-    raw_input: request.input,
-    parsed_input: parsedInput,
-    permissions: userPerms,
-    granted_permissions: granted,
+    run_id: runId, mode: request.mode, code_hash: codeHash, schema_hash: schemaHash,
+    raw_input: request.input, parsed_input: parsedInput,
+    permissions: userPerms, granted_permissions: granted,
     denied_permissions: denied.length > 0 ? denied : undefined,
-    stdout,
-    stderr,
-    exit_code: exitCode,
-    output,
-    error,
-    started_at: startedAtStr,
-    finished_at: finishedAtStr,
-    duration_ms: durationMs,
+    stdout, stderr, exit_code: exitCode, output, error,
+    started_at: startedAtStr, finished_at: finishedAtStr, duration_ms: durationMs,
   };
 }
 
 async function sha256Hex(input: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const data = encoder.encode(input);
-  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+  const enc = new TextEncoder();
+  const hash = await crypto.subtle.digest("SHA-256", enc.encode(input));
+  return Array.from(new Uint8Array(hash)).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
