@@ -21,6 +21,8 @@ export const RunSkillInputSchema = z.object({
 export const SuggestSkillsInputSchema = z.object({
   min_runs: z.number().int().min(1).default(2)
     .describe("Minimum runs to consider a cluster"),
+  cluster_by: z.enum(["schema", "code", "both"]).default("schema")
+    .describe("Clustering dimension"),
 });
 
 export const PromoteToSkillInputSchema = z.object({

@@ -55,6 +55,8 @@ export const RunRecordSchema = z.object({
   project_path: z.string().optional(),
   promoted_to_skill: z.string().optional(),
   skill_path: z.string().optional(),
+  input_schema_json: z.record(z.string(), z.unknown()).optional(),
+  code: z.string().optional(),
 });
 
 export const SkillManifestSchema = z.object({

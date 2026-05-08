@@ -38,6 +38,9 @@ if (inputSchema) {
     "",
   );
   await Deno.writeTextFile("./schema_hash.txt", _hashHex);
+
+  const jsonSchema = inputSchema.toJSONSchema();
+  await Deno.writeTextFile("./schema.json", JSON.stringify(jsonSchema));
 }
 
 try {

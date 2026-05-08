@@ -1,12 +1,7 @@
-import type { ServerPolicy } from "./policy.ts";
-import { resolvePermissions } from "./policy.ts";
-import type { Permissions, RunRecord, RunRequest } from "./types.ts";
-import {
-  approveSkill,
-  hashManifest,
-  loadSkillManifest,
-  resolveSkillEntrypoint,
-} from "./skill.ts";
+import type {ServerPolicy} from "./policy.ts";
+import {resolvePermissions} from "./policy.ts";
+import type {Permissions, RunRecord, RunRequest} from "./types.ts";
+import {hashManifest, loadSkillManifest, resolveSkillEntrypoint,} from "./skill.ts";
 
 const BOOT_PATH = new URL("./boot.ts", import.meta.url).pathname;
 
@@ -125,6 +120,13 @@ async function runModuleInSandbox(
       .trim();
   } catch { /* no-op */ }
 
+  let inputSchemaJson: Record<string, unknown> | undefined;
+  try {
+    inputSchemaJson = JSON.parse(
+      await Deno.readTextFile(`${realRunDir}/schema.json`),
+    );
+  } catch { /* no-op */ }
+
   try {
     await Deno.remove(runDir, { recursive: true });
   } catch { /* best-effort */ }
@@ -147,6 +149,8 @@ async function runModuleInSandbox(
     started_at: startedAtStr,
     finished_at: finishedAtStr,
     duration_ms: durationMs,
+    input_schema_json: inputSchemaJson,
+    code: undefined,
   };
 }
 
@@ -172,18 +176,25 @@ export async function executeRun(
     const { granted, denied } = resolvePermissions(userPerms, options?.policy);
 
     const record = await runModuleInSandbox(
-      runId, modulePath, request.input ?? {},
-      granted, userPerms, denied, "eval", options?.policy,
+      runId,
+      modulePath,
+      request.input ?? {},
+      granted,
+      userPerms,
+      denied,
+      "eval",
+      options?.policy,
     );
 
     // Clean up eval dir (runModuleInSandbox cleans its own dir)
-    try { await Deno.remove(evalDir, { recursive: true }); } catch {}
+    try {
+      await Deno.remove(evalDir, { recursive: true });
+    } catch {}
 
     record.code_hash = codeHash;
+    record.code = request.code!;
     return record;
   }
-
-
 
   if (request.mode !== "module") {
     throw new Error("Unreachable: expected module mode");
@@ -218,8 +229,6 @@ export interface SkillRunResult {
 
 /**
  * Execute a skill by its directory path.
- * Relies on MCP Elicitation (destructiveHint) for client-side approval.
- * Service side: loads manifest, merges permissions, executes, auto-approves.
  */
 export async function executeSkillRun(
   skillDir: string,
@@ -274,11 +283,6 @@ export async function executeSkillRun(
   record.skill_path = skillDir;
   record.project_path = options?.projectPath;
   record.schema_hash = await hashManifest(manifest);
-
-  // Auto-approve after successful execution (client-side Elicitation already handled)
-  if (record.exit_code === 0) {
-    await approveSkill(skillDir).catch(() => {});
-  }
 
   return { record };
 }

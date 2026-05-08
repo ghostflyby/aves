@@ -1,12 +1,8 @@
-import { SkillManifestSchema } from "./schemas.ts";
-import type { RunRecord, SkillManifest } from "./types.ts";
-import { resolvePermissions } from "./policy.ts";
-import { loadSkillApproval, saveRun, saveSkillApproval } from "./run-store.ts";
-import {
-  ensureSkillRoots,
-  getSkillRoots,
-  getWritableSkillRoot,
-} from "./config.ts";
+import {SkillManifestSchema} from "./schemas.ts";
+import type {RunRecord, SkillManifest} from "./types.ts";
+import {resolvePermissions} from "./policy.ts";
+import {loadSkillApproval, saveRun, saveSkillApproval} from "./run-store.ts";
+import {ensureSkillRoots, getSkillRoots, getWritableSkillRoot,} from "./config.ts";
 
 // ============================================================
 // Manifest helpers
@@ -184,9 +180,7 @@ export async function promoteRunToSkill(
     name,
     description,
     permissions: run.granted_permissions,
-    input_schema: run.parsed_input
-      ? { properties: Object.keys(run.parsed_input) }
-      : undefined,
+    input_schema: run.parsed_input ? run.input_schema_json : undefined,
     entrypoint: "./mod.ts",
     requires_approval: true,
     examples: run.raw_input && run.output !== undefined
@@ -218,6 +212,7 @@ export async function promoteRunToSkill(
   );
 
   const entrypointContent = options?.entrypointContent ??
+    run.code ??
     `
 // Skill: ${name}
 // Description: ${description}
@@ -233,6 +228,11 @@ export default async function main(input: unknown) {
       `${skillDir}/examples.json`,
       JSON.stringify(manifest.examples, null, 2),
     );
+  }
+
+  if (manifest.examples && manifest.examples.length > 0) {
+    const testContent = generateReplayTest(name, manifest.examples.slice(0, 2));
+    await Deno.writeTextFile(`${skillDir}/${name}_test.ts`, testContent);
   }
 
   run.promoted_to_skill = skillDir;
@@ -291,7 +291,7 @@ export async function approveSkill(
   }
 
   const mHash = await hashManifest(manifestResult.manifest);
-  await saveSkillApproval({
+  saveSkillApproval({
     skillPath: skillDir,
     manifestHash: mHash,
     approvedAt: new Date().toISOString(),
@@ -299,4 +299,23 @@ export async function approveSkill(
   });
 
   return { ok: true };
+}
+
+function generateReplayTest(skillName: string, examples: unknown[]): string {
+  const lines = [
+    `import { assertEquals } from "@std/assert";`,
+    `import main from "./mod.ts";`,
+    ``,
+  ];
+  for (let i = 0; i < examples.length; i++) {
+    const ex = examples[i] as { input?: unknown; output?: unknown };
+    lines.push(
+      `Deno.test("${skillName} replay ${i}", async () => {`,
+      `  const result = await main(${JSON.stringify(ex.input ?? {})});`,
+      `  assertEquals(result, ${JSON.stringify(ex.output)});`,
+      `});`,
+      ``,
+    );
+  }
+  return lines.join("\n");
 }

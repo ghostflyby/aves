@@ -1,5 +1,5 @@
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import {Server} from "@modelcontextprotocol/sdk/server/index.js";
+import {StdioServerTransport} from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
   type CallToolRequest,
   CallToolRequestSchema,
@@ -7,11 +7,12 @@ import {
   ListToolsRequestSchema,
   McpError,
 } from "@modelcontextprotocol/sdk/types.js";
-import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
-import { executeRun, executeSkillRun } from "../runner.ts";
-import { findClusteredRuns, listRuns, loadRun, saveRun } from "../run-store.ts";
-import { RunRequestSchema } from "../schemas.ts";
-import { listSkills, promoteRunToSkill } from "../skill.ts";
+import {WebStandardStreamableHTTPServerTransport} from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
+import {z} from "zod";
+import {executeRun, executeSkillRun} from "../runner.ts";
+import {findClusteredRuns, findRepeatedRuns, listRuns, loadRun, saveRun,} from "../run-store.ts";
+import {RunRequestSchema} from "../schemas.ts";
+import {approveSkill, checkSkillApproval, listSkills, promoteRunToSkill,} from "../skill.ts";
 import {
   PromoteToSkillInputSchema,
   ReplayRunInputSchema,
@@ -73,6 +74,12 @@ const LIST_SKILLS_TOOL = {
 };
 
 // ============================================================
+// Module-level server reference — set by startup functions
+// ============================================================
+
+let _mcpServer: Server | null = null;
+
+// ============================================================
 // Request handlers — all input validated with Zod .safeParse()
 // ============================================================
 
@@ -128,6 +135,77 @@ async function handleRunSkill(args: Record<string, unknown>) {
   }
 
   const { skill_path, input, permissions } = parsed.data;
+
+  // Check skill approval status
+  const approvalStatus = await checkSkillApproval(skill_path);
+
+  if (approvalStatus.status === "not_found") {
+    throw new McpError(
+      ErrorCode.InvalidParams,
+      `Skill not found or invalid: ${approvalStatus.error}`,
+    );
+  }
+
+  // Need approval — send Elicitation to the client
+  if (approvalStatus.status === "need_approval") {
+    const server = _mcpServer;
+    if (!server) {
+      throw new McpError(
+        ErrorCode.InternalError,
+        "MCP server not initialized",
+      );
+    }
+
+    // Use server.sendRequest() to send an elicitation/create request
+    // asking the client to present an approval prompt to the user
+    const elicitResult = await server.sendRequest(
+      {
+        method: "elicitation/create",
+        params: {
+          mode: "form",
+          message: [
+            `Approve skill execution?`,
+            `Path: ${skill_path}`,
+            ``,
+            `This will execute a skill in a sandboxed Deno environment with its declared permissions.`,
+          ].join("\n"),
+          requestedSchema: {
+            type: "object",
+            properties: {
+              approved: {
+                type: "boolean",
+                title: "Approve",
+                description: "Approve execution of this skill",
+              },
+            },
+          },
+        },
+      },
+      z.object({
+        action: z.enum(["cancel", "accept", "decline"]),
+      }),
+    );
+
+    if (elicitResult.action !== "accept") {
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            ok: false,
+            error: "Skill execution rejected by user",
+          }),
+        }],
+      };
+    }
+
+    // Record approval
+    const approveResult = await approveSkill(skill_path);
+    if (!approveResult.ok) {
+      throw new McpError(ErrorCode.InternalError, approveResult.error);
+    }
+  }
+
+  // Approved — execute
   const result = await executeSkillRun(skill_path, input ?? {}, {
     permissionsOverride: permissions,
   });
@@ -154,23 +232,66 @@ async function handleSuggestSkills(args: Record<string, unknown>) {
     );
   }
 
-  const clusters = await findClusteredRuns();
-  const minRuns = parsed.data.min_runs;
-  const filtered = clusters.filter((c) => c.count >= minRuns);
+  const { min_runs, cluster_by } = parsed.data;
+  const suggestions: Record<string, unknown>[] = [];
+  let totalClusters = 0;
 
-  const suggestions = filtered.map((c) => ({
-    schema_hash: c.schema_hash,
-    run_count: c.count,
-    first_run: c.runs[c.runs.length - 1]?.started_at,
-    last_run: c.runs[0]?.started_at,
-    sample_input: c.runs[0]?.raw_input,
-    sample_output: c.runs[0]?.output,
-  }));
+  if (cluster_by === "schema" || cluster_by === "both") {
+    const clusters = await findClusteredRuns();
+    const filtered = clusters.filter((c) => c.count >= min_runs);
+    totalClusters += filtered.length;
+
+    for (const c of filtered) {
+      const suggestedName = c.runs[c.runs.length - 1]?.raw_input
+        ? Object.keys(c.runs[c.runs.length - 1]!.raw_input!).slice(0, 4).join(
+          "_",
+        ).toLowerCase()
+          .replace(/[^a-z0-9_]/g, "_").replace(/_+/, "_").replace(/^_|_$/g, "")
+        : undefined;
+
+      suggestions.push({
+        dimension: "schema",
+        schema_hash: c.schema_hash,
+        run_count: c.count,
+        first_run: c.runs[c.runs.length - 1]?.started_at,
+        last_run: c.runs[0]?.started_at,
+        sample_input: c.runs[0]?.raw_input,
+        sample_output: c.runs[0]?.output,
+        suggested_name: suggestedName,
+      });
+    }
+  }
+
+  if (cluster_by === "code" || cluster_by === "both") {
+    const clusters = await findRepeatedRuns();
+    const filtered = clusters.filter((c) => c.count >= min_runs);
+    totalClusters += filtered.length;
+
+    for (const c of filtered) {
+      const suggestedName = c.runs[c.runs.length - 1]?.raw_input
+        ? Object.keys(c.runs[c.runs.length - 1]!.raw_input!).slice(0, 4).join(
+          "_",
+        ).toLowerCase()
+          .replace(/[^a-z0-9_]/g, "_").replace(/_+/, "_").replace(/^_|_$/g, "")
+        : undefined;
+
+      suggestions.push({
+        dimension: "code",
+        code_hash: c.code_hash,
+        run_count: c.count,
+        first_run: c.runs[c.runs.length - 1]?.started_at,
+        last_run: c.runs[0]?.started_at,
+        sample_input: c.runs[0]?.raw_input,
+        sample_output: c.runs[0]?.output,
+        suggested_name: suggestedName,
+      });
+    }
+  }
 
   return {
     content: [{
       type: "text",
-      text: JSON.stringify({ suggestions, total_clusters: filtered.length }),
+      text: JSON.stringify({ suggestions, total_clusters: totalClusters }),
     }],
   };
 }
@@ -221,6 +342,9 @@ export async function startHttpServer(
     { name: "aves-mcp", version: "0.1.0" },
     { capabilities: { tools: {} } },
   );
+
+  // Make the server instance available to handlers
+  _mcpServer = mcpServer;
 
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: crypto.randomUUID.bind(crypto),
@@ -289,6 +413,9 @@ export async function startServer() {
     },
     { capabilities: { tools: {} } },
   );
+
+  // Make the server instance available to handlers
+  _mcpServer = server;
 
   server.setRequestHandler(ListToolsRequestSchema, () => ({
     tools: [

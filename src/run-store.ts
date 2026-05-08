@@ -38,8 +38,19 @@ function getDb(): DatabaseSync {
       project_path TEXT,
       promoted_to_skill TEXT,
       skill_path TEXT
+      input_schema_json TEXT,
+      code TEXT
     )
   `);
+
+  // Migrate: add new columns if missing
+  for (const col of ["input_schema_json TEXT", "code TEXT"]) {
+    try {
+      _db.exec(`ALTER TABLE runs ADD COLUMN ${col}`);
+    } catch {
+      // Column already exists
+    }
+  }
 
   _db.exec(`
     CREATE TABLE IF NOT EXISTS skill_approvals (
@@ -111,6 +122,8 @@ function rowToRecord(row: Record<string, unknown>): RunRecord {
     project_path: row.project_path as string | undefined,
     promoted_to_skill: row.promoted_to_skill as string | undefined,
     skill_path: row.skill_path as string | undefined,
+    input_schema_json: fromJson(row.input_schema_json),
+    code: row.code as string | undefined,
   };
 }
 
@@ -125,8 +138,9 @@ export function saveRun(record: RunRecord): void {
        raw_input, parsed_input, permissions, granted_permissions, denied_permissions,
        stdout, stderr, exit_code, output, error,
        started_at, finished_at, duration_ms,
-       project_path, promoted_to_skill, skill_path)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       project_path, promoted_to_skill, skill_path
+       , input_schema_json, code)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     record.run_id,
     record.mode,
@@ -148,6 +162,8 @@ export function saveRun(record: RunRecord): void {
     record.project_path ?? null,
     record.promoted_to_skill ?? null,
     record.skill_path ?? null,
+    toJson(record.input_schema_json),
+    record.code ?? null,
   );
 }
 
