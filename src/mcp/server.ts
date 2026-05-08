@@ -94,7 +94,7 @@ async function handleRunScript(args: Record<string, unknown>) {
   }
 
   const record = await executeRun(result.data);
-  await saveRun(record);
+  saveRun(record);
   return { content: [{ type: "text", text: JSON.stringify(record, null, 2) }] };
 }
 
@@ -107,7 +107,7 @@ async function handleReplayRun(args: Record<string, unknown>) {
     );
   }
 
-  const record = await loadRun(parsed.data.run_id);
+  const record = loadRun(parsed.data.run_id);
   if (!record) {
     throw new McpError(
       ErrorCode.InvalidParams,
@@ -119,7 +119,7 @@ async function handleReplayRun(args: Record<string, unknown>) {
 }
 
 async function handleListRuns() {
-  const records = await listRuns();
+  const records = listRuns();
   return {
     content: [{ type: "text", text: JSON.stringify(records, null, 2) }],
   };
@@ -156,9 +156,9 @@ async function handleRunSkill(args: Record<string, unknown>) {
       );
     }
 
-    // Use server.sendRequest() to send an elicitation/create request
+    // Use server.request() to send an elicitation/create request
     // asking the client to present an approval prompt to the user
-    const elicitResult = await server.sendRequest(
+    const elicitResult = await server.request(
       {
         method: "elicitation/create",
         params: {
@@ -181,12 +181,11 @@ async function handleRunSkill(args: Record<string, unknown>) {
           },
         },
       },
-      z.object({
-        action: z.enum(["cancel", "accept", "decline"]),
-      }),
+  // @ts-expect-error SDK ZodType mismatch
+      z.object({}),
     );
 
-    if (elicitResult.action !== "accept") {
+    if ((elicitResult as Record<string, string>).action !== "accept") {
       return {
         content: [{
           type: "text",
@@ -217,7 +216,7 @@ async function handleRunSkill(args: Record<string, unknown>) {
     );
   }
 
-  await saveRun(result.record);
+  saveRun(result.record);
   return {
     content: [{ type: "text", text: JSON.stringify(result.record, null, 2) }],
   };
@@ -237,7 +236,7 @@ async function handleSuggestSkills(args: Record<string, unknown>) {
   let totalClusters = 0;
 
   if (cluster_by === "schema" || cluster_by === "both") {
-    const clusters = await findClusteredRuns();
+    const clusters = findClusteredRuns();
     const filtered = clusters.filter((c) => c.count >= min_runs);
     totalClusters += filtered.length;
 
@@ -263,7 +262,7 @@ async function handleSuggestSkills(args: Record<string, unknown>) {
   }
 
   if (cluster_by === "code" || cluster_by === "both") {
-    const clusters = await findRepeatedRuns();
+    const clusters = findRepeatedRuns();
     const filtered = clusters.filter((c) => c.count >= min_runs);
     totalClusters += filtered.length;
 
@@ -306,7 +305,7 @@ async function handlePromoteToSkill(args: Record<string, unknown>) {
   }
 
   const { run_id, name, description } = parsed.data;
-  const run = await loadRun(run_id);
+  const run = loadRun(run_id);
   if (!run) {
     throw new McpError(ErrorCode.InvalidParams, `Run not found: ${run_id}`);
   }
