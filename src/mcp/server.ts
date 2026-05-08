@@ -335,7 +335,6 @@ async function handleListSkills() {
  * Registers endpoint info for discovery by stdio adapter.
  */
 export async function startHttpServer(
-  port: number,
   host: string = "127.0.0.1",
 ): Promise<{ port: number }> {
   const mcpServer = new Server(
@@ -390,19 +389,22 @@ export async function startHttpServer(
   await mcpServer.connect(transport);
 
   const controller = new AbortController();
+  const { promise: portPromise, resolve: resolvePort } = Promise.withResolvers<
+    number
+  >();
   Deno.serve({
-    port,
+    port: 0,
     hostname: host,
     signal: controller.signal,
     onListen: ({ port: actualPort }) => {
       console.error(`Aves MCP HTTP server listening on ${host}:${actualPort}`);
+      resolvePort(actualPort);
     },
   }, async (req: Request) => {
     return transport.handleRequest(req);
   });
 
-  // Return the port (may differ if 0 was passed)
-  return { port };
+  return { port: await portPromise };
 }
 
 export async function startServer() {

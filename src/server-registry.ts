@@ -173,23 +173,3 @@ export async function cleanupAll(): Promise<void> {
     await Deno.remove(await getServerDir());
   } catch { /* no-op */ }
 }
-
-/**
- * Find an available port by letting the OS assign one.
- */
-export async function findAvailablePort(preferred?: number): Promise<number> {
-  if (preferred) {
-    try {
-      const listener = await Deno.listen({ port: preferred });
-      listener.close();
-      return preferred;
-    } catch {
-      // Port unavailable, fall through
-    }
-  }
-
-  const listener = await Deno.listen({ port: 0 });
-  const port = (listener.addr as Deno.NetAddr).port;
-  listener.close();
-  return port;
-}
