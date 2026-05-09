@@ -1,8 +1,12 @@
-import {SkillManifestSchema} from "./schemas.ts";
-import type {RunRecord, SkillManifest} from "./types.ts";
-import {resolvePermissions} from "./policy.ts";
-import {loadSkillApproval, saveRun, saveSkillApproval} from "./run-store.ts";
-import {ensureSkillRoots, getSkillRoots, getWritableSkillRoot,} from "./config.ts";
+import { SkillManifestSchema } from "./schemas.ts";
+import type { RunRecord, SkillManifest } from "./types.ts";
+import { resolvePermissions } from "./policy.ts";
+import { loadSkillApproval, saveRun, saveSkillApproval } from "./run-store.ts";
+import {
+  ensureSkillRoots,
+  getSkillRoots,
+  getWritableSkillRoot,
+} from "./config.ts";
 
 // ============================================================
 // Manifest helpers
@@ -26,6 +30,69 @@ export function validateManifest(
     };
   }
   return { ok: true, manifest: result.data };
+}
+
+async function sha256Hex(data: string | Uint8Array): Promise<string> {
+  const bytes = typeof data === "string"
+    ? new TextEncoder().encode(data)
+    : data;
+  const buffer = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(buffer).set(bytes);
+  const hash = await crypto.subtle.digest("SHA-256", buffer);
+  return Array.from(new Uint8Array(hash))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+const GENERATED_SKILL_FILES = new Set([
+  "SKILL.md",
+  "skill.json",
+  "examples.json",
+  "test.ts",
+]);
+
+const GENERATED_SKILL_DIRS = new Set([
+  "node_modules",
+  "dist",
+  "build",
+  "coverage",
+]);
+
+function shouldHashSkillEntry(relativePath: string, name: string): boolean {
+  if (name.startsWith(".")) return false;
+  return !GENERATED_SKILL_FILES.has(relativePath);
+}
+
+/**
+ * Compute a content hash for a skill directory.
+ * Hashes user-authored files recursively, excluding generated metadata.
+ */
+export async function hashSkillContent(skillDir: string): Promise<string> {
+  const entries: Array<{ path: string; hash: string }> = [];
+
+  async function collect(dir: string, prefix = ""): Promise<void> {
+    for await (const entry of Deno.readDir(dir)) {
+      const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (!shouldHashSkillEntry(relativePath, entry.name)) continue;
+      if (entry.isSymlink) continue;
+
+      const path = `${dir}/${entry.name}`;
+      if (entry.isDirectory) {
+        if (GENERATED_SKILL_DIRS.has(entry.name)) continue;
+        await collect(path, relativePath);
+        continue;
+      }
+
+      if (!entry.isFile) continue;
+      const data = await Deno.readFile(path);
+      entries.push({ path: relativePath, hash: await sha256Hex(data) });
+    }
+  }
+
+  await collect(skillDir);
+  entries.sort((a, b) => a.path.localeCompare(b.path));
+  const combined = entries.map((e) => `${e.path}:${e.hash}`).join("\n");
+  return sha256Hex(combined);
 }
 
 /**
@@ -103,7 +170,9 @@ function generateSkillMarkdown(
   const lines: string[] = [];
   lines.push("---");
   lines.push(`name: ${name}`);
-  lines.push(`description: "${description}. Requires the Aves MCP server \u2014 use the \`run_skill\` tool with skill_path set to this directory."`);
+  lines.push(
+    `description: "${description}. Requires the Aves MCP server \u2014 use the \`run_skill\` tool with skill_path set to this directory."`,
+  );
   lines.push("aves: true");
   lines.push("---");
   lines.push("");
@@ -116,18 +185,26 @@ function generateSkillMarkdown(
   lines.push("Call the `run_skill` MCP tool from the **aves** server:");
   lines.push("");
   lines.push("- `skill_path`: absolute path to this directory");
-  lines.push("- `input`: JSON matching the schema in `skill.json` \u2192 `input_schema`");
+  lines.push(
+    "- `input`: JSON matching the schema in `skill.json` \u2192 `input_schema`",
+  );
   lines.push("");
-  lines.push("The Zod input definition is exported as `inputSchema` from `./mod.ts`.");
+  lines.push(
+    "The Zod input definition is exported as `inputSchema` from `./mod.ts`.",
+  );
   lines.push("");
   lines.push("See `./examples.json` for sample input/output pairs.");
   lines.push("");
   lines.push("## Notes");
   lines.push("");
   if (requiresApproval) {
-    lines.push("- First run may trigger an approval prompt depending on `requires_approval` in `skill.json`");
+    lines.push(
+      "- First run may trigger an approval prompt depending on `requires_approval` in `skill.json`",
+    );
   }
-  lines.push("- This skill requires the `aves` MCP server to be configured and available");
+  lines.push(
+    "- This skill requires the `aves` MCP server to be configured and available",
+  );
   lines.push("");
   return lines.join("\n");
 }
@@ -292,6 +369,12 @@ export default async function main(input: unknown) {
 
 export type SkillApprovalStatus =
   | { status: "approved" }
+  | {
+    status: "content_changed";
+    skillPath: string;
+    manifestHash: string;
+    contentHash: string;
+  }
   | { status: "need_approval"; skillPath: string; manifestHash: string }
   | { status: "not_found"; error: string };
 
@@ -308,20 +391,44 @@ export async function checkSkillApproval(
 
   const manifest = manifestResult.manifest;
   const mHash = await hashManifest(manifest);
+
+  if (!manifest.requires_approval) {
+    return { status: "approved" };
+  }
+
   const existing = await loadSkillApproval(skillDir);
 
-  if (!manifest.requires_approval && existing?.manifestHash === mHash) {
-    return { status: "approved" };
-  }
-  if (existing?.manifestHash === mHash) {
-    return { status: "approved" };
+  // No prior approval record
+  if (!existing) {
+    return {
+      status: "need_approval",
+      skillPath: skillDir,
+      manifestHash: mHash,
+    };
   }
 
-  return {
-    status: "need_approval",
-    skillPath: skillDir,
-    manifestHash: mHash,
-  };
+  // Manifest (permissions) changed — re-approve
+  if (existing.manifestHash !== mHash) {
+    return {
+      status: "need_approval",
+      skillPath: skillDir,
+      manifestHash: mHash,
+    };
+  }
+
+  // Content changed — soft notification
+  const cHash = await hashSkillContent(skillDir);
+  if (existing.contentHash !== cHash) {
+    return {
+      status: "content_changed",
+      skillPath: skillDir,
+      manifestHash: mHash,
+      contentHash: cHash,
+    };
+  }
+
+  // Everything matches
+  return { status: "approved" };
 }
 
 /**
@@ -336,9 +443,11 @@ export async function approveSkill(
   }
 
   const mHash = await hashManifest(manifestResult.manifest);
+  const cHash = await hashSkillContent(skillDir);
   saveSkillApproval({
     skillPath: skillDir,
     manifestHash: mHash,
+    contentHash: cHash,
     approvedAt: new Date().toISOString(),
     requiresApproval: manifestResult.manifest.requires_approval,
   });

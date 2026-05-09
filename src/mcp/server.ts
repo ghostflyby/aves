@@ -1,5 +1,5 @@
-import {Server} from "@modelcontextprotocol/sdk/server/index.js";
-import {StdioServerTransport} from "@modelcontextprotocol/sdk/server/stdio.js";
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
   type CallToolRequest,
   CallToolRequestSchema,
@@ -7,12 +7,23 @@ import {
   ListToolsRequestSchema,
   McpError,
 } from "@modelcontextprotocol/sdk/types.js";
-import {WebStandardStreamableHTTPServerTransport} from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
-import {z} from "zod";
-import {executeRun, executeSkillRun} from "../runner.ts";
-import {findClusteredRuns, findRepeatedRuns, listRuns, loadRun, saveRun,} from "../run-store.ts";
-import {RunRequestSchema} from "../schemas.ts";
-import {approveSkill, checkSkillApproval, listSkills, promoteRunToSkill,} from "../skill.ts";
+import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
+import { z } from "zod";
+import { executeRun, executeSkillRun } from "../runner.ts";
+import {
+  findClusteredRuns,
+  findRepeatedRuns,
+  listRuns,
+  loadRun,
+  saveRun,
+} from "../run-store.ts";
+import { RunRequestSchema } from "../schemas.ts";
+import {
+  approveSkill,
+  checkSkillApproval,
+  listSkills,
+  promoteRunToSkill,
+} from "../skill.ts";
 import {
   PromoteToSkillInputSchema,
   ReplayRunInputSchema,
@@ -78,6 +89,19 @@ const LIST_SKILLS_TOOL = {
 // ============================================================
 
 let _mcpServer: Server | null = null;
+
+const ElicitationResponseSchema = z.object({
+  action: z.literal("accept"),
+  content: z.object({
+    approved: z.literal(true),
+  }).optional(),
+});
+
+function isElicitationApproved(
+  result: unknown,
+): result is z.infer<typeof ElicitationResponseSchema> {
+  return ElicitationResponseSchema.safeParse(result).success;
+}
 
 // ============================================================
 // Request handlers — all input validated with Zod .safeParse()
@@ -146,6 +170,60 @@ async function handleRunSkill(args: Record<string, unknown>) {
     );
   }
 
+  // Content changed — notify and ask user to confirm
+  if (approvalStatus.status === "content_changed") {
+    const server = _mcpServer;
+    if (!server) {
+      throw new McpError(
+        ErrorCode.InternalError,
+        "MCP server not initialized",
+      );
+    }
+
+    const elicitResult = await server.request(
+      {
+        method: "elicitation/create",
+        params: {
+          mode: "form",
+          message: [
+            `Skill content has changed since last approval.`,
+            `Path: ${skill_path}`,
+            ``,
+            `Permissions are unchanged. Continue execution?`,
+          ].join("\n"),
+          requestedSchema: {
+            type: "object",
+            properties: {
+              approved: {
+                type: "boolean",
+                title: "Continue",
+                description: "Continue execution with the updated content",
+              },
+            },
+          },
+        },
+      },
+      ElicitationResponseSchema,
+    );
+
+    if (!isElicitationApproved(elicitResult)) {
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            ok: false,
+            error: "Skill execution cancelled due to content change",
+          }),
+        }],
+      };
+    }
+
+    const approveResult = await approveSkill(skill_path);
+    if (!approveResult.ok) {
+      throw new McpError(ErrorCode.InternalError, approveResult.error);
+    }
+  }
+
   // Need approval — send Elicitation to the client
   if (approvalStatus.status === "need_approval") {
     const server = _mcpServer;
@@ -181,10 +259,10 @@ async function handleRunSkill(args: Record<string, unknown>) {
           },
         },
       },
-      z.object({}).passthrough(),
+      ElicitationResponseSchema,
     );
 
-    if ((elicitResult as Record<string, string>).action !== "accept") {
+    if (!isElicitationApproved(elicitResult)) {
       return {
         content: [{
           type: "text",

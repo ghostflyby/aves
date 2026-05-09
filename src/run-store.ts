@@ -56,10 +56,17 @@ function getDb(): DatabaseSync {
     CREATE TABLE IF NOT EXISTS skill_approvals (
       skill_path TEXT PRIMARY KEY,
       manifest_hash TEXT NOT NULL,
+      content_hash TEXT,
       approved_at TEXT NOT NULL,
       requires_approval BOOLEAN DEFAULT true
     )
   `);
+
+  try {
+    _db.exec("ALTER TABLE skill_approvals ADD COLUMN content_hash TEXT");
+  } catch {
+    // Column already exists
+  }
 
   _db.exec("CREATE INDEX IF NOT EXISTS idx_runs_mode ON runs(mode)");
   _db.exec("CREATE INDEX IF NOT EXISTS idx_runs_code_hash ON runs(code_hash)");
@@ -238,6 +245,7 @@ export function findRepeatedRuns(): {
 export interface SkillApproval {
   skillPath: string;
   manifestHash: string;
+  contentHash?: string;
   approvedAt: string;
   requiresApproval: boolean;
 }
@@ -245,11 +253,12 @@ export interface SkillApproval {
 export function saveSkillApproval(approval: SkillApproval): void {
   getDb().prepare(`
     INSERT OR REPLACE INTO skill_approvals
-      (skill_path, manifest_hash, approved_at, requires_approval)
-    VALUES (?, ?, ?, ?)
+      (skill_path, manifest_hash, content_hash, approved_at, requires_approval)
+    VALUES (?, ?, ?, ?, ?)
   `).run(
     approval.skillPath,
     approval.manifestHash,
+    approval.contentHash ?? null,
     approval.approvedAt,
     approval.requiresApproval ? 1 : 0,
   );
@@ -265,6 +274,7 @@ export function loadSkillApproval(
   return {
     skillPath: row.skill_path as string,
     manifestHash: row.manifest_hash as string,
+    contentHash: row.content_hash as string | undefined,
     approvedAt: row.approved_at as string,
     requiresApproval: (row.requires_approval as number) === 1,
   };
