@@ -434,7 +434,7 @@ export async function approveSkill(
 
   const mHash = await hashManifest(manifestResult.manifest);
   const cHash = await hashSkillContent(skillDir);
-  saveSkillApproval({
+  await saveSkillApproval({
     skillPath: skillDir,
     manifestHash: mHash,
     contentHash: cHash,

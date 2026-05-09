@@ -192,7 +192,7 @@ async function handleRunScript(args: Record<string, unknown>) {
   }
 
   const record = await executeRun(result.data);
-  saveRun(record);
+  await saveRun(record);
   return { content: [{ type: "text", text: JSON.stringify(record, null, 2) }] };
 }
 
@@ -205,7 +205,7 @@ async function handleReplayRun(args: Record<string, unknown>) {
     );
   }
 
-  const record = loadRun(parsed.data.run_id);
+  const record = await loadRun(parsed.data.run_id);
   if (!record) {
     throw new McpError(
       ErrorCode.InvalidParams,
@@ -218,7 +218,9 @@ async function handleReplayRun(args: Record<string, unknown>) {
 
 async function handleListRuns(args?: Record<string, unknown>) {
   const parsed = args ? ListRunsInputSchema.safeParse(args) : null;
-  const records = parsed?.success ? listRunsFiltered(parsed.data) : listRuns();
+  const records = parsed?.success
+    ? await listRunsFiltered(parsed.data)
+    : await listRuns();
   return {
     content: [{ type: "text", text: JSON.stringify(records, null, 2) }],
   };
@@ -401,7 +403,7 @@ async function handleRunSkill(args: Record<string, unknown>) {
     );
   }
 
-  saveRun(result.record);
+  await saveRun(result.record);
   return {
     content: [{ type: "text", text: JSON.stringify(result.record, null, 2) }],
   };
@@ -421,7 +423,7 @@ async function handleSuggestSkills(args: Record<string, unknown>) {
   let totalClusters = 0;
 
   if (cluster_by === "schema" || cluster_by === "both") {
-    const clusters = findClusteredRuns();
+    const clusters = await findClusteredRuns();
     const filtered = clusters.filter((c) => c.count >= min_runs);
     totalClusters += filtered.length;
 
@@ -447,7 +449,7 @@ async function handleSuggestSkills(args: Record<string, unknown>) {
   }
 
   if (cluster_by === "code" || cluster_by === "both") {
-    const clusters = findRepeatedRuns();
+    const clusters = await findRepeatedRuns();
     const filtered = clusters.filter((c) => c.count >= min_runs);
     totalClusters += filtered.length;
 
@@ -490,7 +492,7 @@ async function handlePromoteToSkill(args: Record<string, unknown>) {
   }
 
   const { run_id, name, description } = parsed.data;
-  const run = loadRun(run_id);
+  const run = await loadRun(run_id);
   if (!run) {
     throw new McpError(ErrorCode.InvalidParams, `Run not found: ${run_id}`);
   }
@@ -624,7 +626,7 @@ export async function startHttpServer(
       console.error(`Aves MCP HTTP server listening on ${host}:${actualPort}`);
       resolvePort(actualPort);
     },
-  }, async (req: Request) => {
+  }, (req: Request) => {
     return transport.handleRequest(req);
   });
 

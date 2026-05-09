@@ -207,7 +207,7 @@ function enqueue(
  * Execute a read-only SQL query against the Aves database.
  * Uses the worker pool internally.
  */
-export async function querySqlite(
+export function querySqlite(
   sql: string,
   params?: (string | number | null)[],
   timeoutMs: number = 10_000,

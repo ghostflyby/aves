@@ -220,7 +220,7 @@ export async function executeRun(
     // Clean up eval dir (runModuleInSandbox cleans its own dir)
     try {
       await Deno.remove(evalDir, { recursive: true });
-    } catch {}
+    } catch { /* skip */ }
 
     record.code_hash = codeHash;
     record.code = request.code!;

@@ -174,7 +174,7 @@ Deno.test("promoteRunToSkill - creates skill files on disk", async () => {
   // Cleanup
   try {
     await Deno.remove("/tmp/aves-test-promote", { recursive: true });
-  } catch {}
+  } catch { /* skip */ }
   if (prevData) Deno.env.set("AVES_DATA_DIR", prevData);
   else Deno.env.delete("AVES_DATA_DIR");
 });
@@ -204,7 +204,7 @@ Deno.test("listSkills - returns empty for clean state", async () => {
 
   try {
     await Deno.remove("/tmp/aves-test-listskills", { recursive: true });
-  } catch {}
+  } catch { /* skip */ }
   if (prevData) Deno.env.set("AVES_DATA_DIR", prevData);
   else Deno.env.delete("AVES_DATA_DIR");
 });
