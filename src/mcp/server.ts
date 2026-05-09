@@ -19,6 +19,7 @@ import {
   saveRun,
 } from "../run-store.ts";
 import { RunRequestSchema } from "../schemas.ts";
+import { RUNS_TABLE_DDL } from "../db-schema.ts";
 import {
   approveSkill,
   checkSkillApproval,
@@ -92,7 +93,7 @@ const LIST_SKILLS_TOOL = {
 const QUERY_SQLITE_TOOL = {
   name: "query_sqlite",
   description:
-    "Run a read-only SQL query against the Aves SQLite database. Only SELECT and PRAGMA statements are allowed.",
+    `Run a read-only SQL query against the Aves SQLite database. Only SELECT and PRAGMA statements are allowed.\n\nTable schema:\nCREATE TABLE runs (${RUNS_TABLE_DDL})`,
   inputSchema: QuerySqliteInputSchema.toJSONSchema(),
   annotations: { readOnlyHint: true },
 };

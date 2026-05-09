@@ -5,6 +5,7 @@
 
 import { DatabaseSync } from "node:sqlite";
 import { getAvesDbPath } from "./paths.ts";
+import { RUNS_TABLE_DDL } from "./db-schema.ts";
 
 // ============================================================
 // Database initialization
@@ -13,32 +14,7 @@ import { getAvesDbPath } from "./paths.ts";
 const db = new DatabaseSync(getAvesDbPath());
 db.exec("PRAGMA journal_mode=WAL");
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS runs (
-    run_id TEXT PRIMARY KEY,
-    mode TEXT NOT NULL,
-    code_hash TEXT,
-    schema_hash TEXT,
-    raw_input TEXT,
-    parsed_input TEXT,
-    permissions TEXT,
-    granted_permissions TEXT,
-    denied_permissions TEXT,
-    stdout TEXT,
-    stderr TEXT,
-    exit_code INTEGER,
-    output TEXT,
-    error TEXT,
-    started_at TEXT NOT NULL,
-    finished_at TEXT NOT NULL,
-    duration_ms INTEGER NOT NULL,
-    project_path TEXT,
-    promoted_to_skill TEXT,
-    skill_path TEXT,
-    input_schema_json TEXT,
-    code TEXT
-  )
-`);
+db.exec(`CREATE TABLE IF NOT EXISTS runs (${RUNS_TABLE_DDL})`);
 
 // Migrate: add new columns if missing
 for (const col of ["input_schema_json TEXT", "code TEXT"]) {
