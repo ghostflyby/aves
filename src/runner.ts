@@ -59,7 +59,7 @@ async function runModuleInSandbox(
   userPerms: Permissions,
   denied: string[],
   mode: RunRecord["mode"],
-  policy?: ServerPolicy,
+  extraDenyPaths?: string[],
 ): Promise<RunRecord> {
   const runDir = await Deno.makeTempDir({
     prefix: "aves_",
@@ -98,6 +98,7 @@ async function runModuleInSandbox(
     getAvesDataDir(),
     getAvesConfigDir(),
     getAvesStateDir(),
+    ...(extraDenyPaths ?? []),
   ].filter(Boolean);
   const denyFlags = buildDenyFlags(avesDenyPaths);
 
@@ -214,7 +215,6 @@ export async function executeRun(
       userPerms,
       denied,
       "eval",
-      options?.policy,
     );
 
     // Clean up eval dir (runModuleInSandbox cleans its own dir)
@@ -246,7 +246,6 @@ export async function executeRun(
     userPerms,
     denied,
     request.mode,
-    options?.policy,
   );
 }
 
@@ -299,6 +298,7 @@ export async function executeSkillRun(
     options?.policy,
   );
   const entrypoint = resolveSkillEntrypoint(skillDir, manifest);
+  const realSkillDir = await Deno.realPath(skillDir);
 
   const record = await runModuleInSandbox(
     runId,
@@ -308,7 +308,7 @@ export async function executeSkillRun(
     effectivePerms,
     denied,
     "skill",
-    options?.policy,
+    [realSkillDir],
   );
 
   record.skill_path = skillDir;
