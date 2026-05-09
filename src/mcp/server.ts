@@ -25,8 +25,11 @@ import {
   promoteRunToSkill,
 } from "../skill.ts";
 import {
-  PromoteToSkillInputSchema, RunScriptInputSchema,
-  ReplayRunInputSchema, RunSkillInputSchema, SuggestSkillsInputSchema,
+  PromoteToSkillInputSchema,
+  ReplayRunInputSchema,
+  RunScriptInputSchema,
+  RunSkillInputSchema,
+  SuggestSkillsInputSchema,
 } from "./tool-schemas.ts";
 
 // ============================================================

@@ -15,8 +15,11 @@ export const RunScriptInputSchema = z.object({
   code: z.string().describe(
     "TypeScript module: export default async function main(input: unknown) { ... } as entry point. Supports Zod@4, Deno/node built-ins, ES module syntax.",
   ).optional(),
-  modulePath: z.string().describe("Path to external module file (module mode)").optional(),
-  input: z.record(z.string(), z.unknown()).describe("Input arguments for the script").optional(),
+  modulePath: z.string().describe("Path to external module file (module mode)")
+    .optional(),
+  input: z.record(z.string(), z.unknown()).describe(
+    "Input arguments for the script",
+  ).optional(),
   permissions: PermissionsSchema.optional().describe("Permission overrides"),
 });
 
