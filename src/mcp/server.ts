@@ -25,10 +25,8 @@ import {
   promoteRunToSkill,
 } from "../skill.ts";
 import {
-  PromoteToSkillInputSchema,
-  ReplayRunInputSchema,
-  RunSkillInputSchema,
-  SuggestSkillsInputSchema,
+  PromoteToSkillInputSchema, RunScriptInputSchema,
+  ReplayRunInputSchema, RunSkillInputSchema, SuggestSkillsInputSchema,
 } from "./tool-schemas.ts";
 
 // ============================================================
@@ -39,7 +37,7 @@ const RUN_SCRIPT_TOOL = {
   name: "run_script",
   description:
     'Execute a TypeScript module in a sandboxed Deno subprocess. Script format: export default async function main(input: unknown) { ... } — the default export receives the `input` object and is awaited. Optionally export `inputSchema` (Zod@4 schema) for runtime input validation. Supports `import { z } from "zod"`, Deno built-ins, and node:compat libraries (node:fs, node:path, node:os). ES module format only. Use mode: "eval" with inline code, or mode: "module" with a modulePath. Runs with --no-prompt; permissions from the request parameter.',
-  inputSchema: RunRequestSchema.toJSONSchema(),
+  inputSchema: RunScriptInputSchema.toJSONSchema(),
   annotations: { destructiveHint: true },
 };
 

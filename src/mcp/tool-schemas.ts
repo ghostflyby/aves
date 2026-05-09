@@ -2,12 +2,22 @@ import { z } from "zod";
 import { PermissionsSchema } from "../schemas.ts";
 
 /**
- * Zod schemas for MCP tool inputs.
- * Single source of truth for both JSON Schema generation and runtime validation.
+ * Zod schemas for MCP tool inputSchema (flat object — MCP SDK requires type:object at root).
+ * Runtime validation still uses the stricter RunRequestSchema in schemas.ts.
  */
 
 export const ReplayRunInputSchema = z.object({
   run_id: z.string().describe("Run ID to replay"),
+});
+
+export const RunScriptInputSchema = z.object({
+  mode: z.enum(["eval", "module"]).describe("Script execution mode"),
+  code: z.string().describe(
+    "TypeScript module: export default async function main(input: unknown) { ... } as entry point. Supports Zod@4, Deno/node built-ins, ES module syntax.",
+  ).optional(),
+  modulePath: z.string().describe("Path to external module file (module mode)").optional(),
+  input: z.record(z.string(), z.unknown()).describe("Input arguments for the script").optional(),
+  permissions: PermissionsSchema.optional().describe("Permission overrides"),
 });
 
 export const RunSkillInputSchema = z.object({
