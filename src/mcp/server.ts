@@ -22,6 +22,11 @@ import {
   saveRun,
 } from "../run-store.ts";
 import { RunRequestSchema } from "../schemas.ts";
+import {
+  handleListResources,
+  handleListResourceTemplates,
+  handleReadResource,
+} from "./resources.ts";
 import { RUNS_TABLE_DDL } from "../db-schema.ts";
 import {
   approveSkill,
@@ -557,110 +562,7 @@ async function handleListSkills() {
 // ============================================================
 // Server startup
 // ============================================================
-
 // ============================================================
-// Resources — static metadata and parameterized lookups
-// ============================================================
-
-async function handleListResources(): Promise<{
-  resources: {
-    uri: string;
-    name: string;
-    description?: string;
-    mimeType?: string;
-  }[];
-}> {
-  return {
-    resources: [
-      {
-        uri: "aves://schema/runs",
-        name: "Runs table schema",
-        description:
-          "Column definitions for the runs table with type annotations",
-        mimeType: "text/plain",
-      },
-    ],
-  };
-}
-
-async function handleListResourceTemplates(): Promise<{
-  resourceTemplates: {
-    uriTemplate: string;
-    name: string;
-    description?: string;
-    mimeType?: string;
-  }[];
-}> {
-  return {
-    resourceTemplates: [
-      {
-        uriTemplate: "aves://skills/{name}",
-        name: "Skill by name",
-        description: "Retrieve a single skill's manifest by its directory name",
-        mimeType: "application/json",
-      },
-      {
-        uriTemplate: "aves://runs/{run_id}",
-        name: "Run by ID",
-        description: "Retrieve a single run record by its UUID",
-        mimeType: "application/json",
-      },
-    ],
-  };
-}
-
-async function handleReadResource(uri: string): Promise<{
-  contents: { uri: string; mimeType: string; text: string }[];
-}> {
-  if (uri === "aves://schema/runs") {
-    return {
-      contents: [{
-        uri,
-        mimeType: "text/plain",
-        text: `CREATE TABLE runs (\n${RUNS_TABLE_DDL})`,
-      }],
-    };
-  }
-
-  const skillMatch = uri.match(/^aves:\/\/skills\/(.+)$/);
-  if (skillMatch) {
-    const skills = await listSkills();
-    const skill = skills.find((s) => s.name === skillMatch[1]);
-    if (!skill) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        `Skill not found: ${skillMatch[1]}`,
-      );
-    }
-    return {
-      contents: [{
-        uri,
-        mimeType: "application/json",
-        text: JSON.stringify(skill, null, 2),
-      }],
-    };
-  }
-
-  const runMatch = uri.match(/^aves:\/\/runs\/(.+)$/);
-  if (runMatch) {
-    const run = await loadRun(runMatch[1]);
-    if (!run) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        `Run not found: ${runMatch[1]}`,
-      );
-    }
-    return {
-      contents: [{
-        uri,
-        mimeType: "application/json",
-        text: JSON.stringify(run, null, 2),
-      }],
-    };
-  }
-
-  throw new McpError(ErrorCode.InvalidParams, `Unknown resource: ${uri}`);
-}
 /**
  * Start an HTTP MCP server (long-running daemon).
  * Registers endpoint info for discovery by stdio adapter.
