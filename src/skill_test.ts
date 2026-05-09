@@ -168,6 +168,20 @@ Deno.test("promoteRunToSkill - creates skill files on disk", async () => {
     const statMod = await Deno.stat(`${result.skillDir}/mod.ts`);
     assertEquals(statMod.isFile, true);
 
+    const statSkMd = await Deno.stat(`${result.skillDir}/SKILL.md`);
+    assertEquals(statSkMd.isFile, true);
+
+    const statTest = await Deno.stat(`${result.skillDir}/test.ts`);
+    assertEquals(statTest.isFile, true);
+
+    // Verify SKILL.md content
+    const skMdContent = await Deno.readTextFile(`${result.skillDir}/SKILL.md`);
+    assertStringIncludes(skMdContent, "test-promote-skill");
+    assertStringIncludes(skMdContent, "aves: true");
+    assertStringIncludes(skMdContent, "run_skill");
+    assertStringIncludes(skMdContent, "skill_path");
+    assertStringIncludes(skMdContent, "skill.json");
+
     // Verify manifest content
     const manifestResult = await loadSkillManifest(result.skillDir);
     assertEquals(manifestResult.ok, true);

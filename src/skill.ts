@@ -92,6 +92,46 @@ export function resolveSkillEntrypoint(
 }
 
 // ============================================================
+// SKILL.md generation
+// ============================================================
+
+function generateSkillMarkdown(manifest: SkillManifest): string {
+  const lines: string[] = [];
+  lines.push("---");
+  lines.push(`name: ${manifest.name}`);
+  lines.push(`description: "${manifest.description}. Requires the Aves MCP server to be configured and available. Call \`run_skill\` with the skill_path set to this directory."`);
+  lines.push("aves: true");
+  lines.push("---");
+  lines.push("");
+  lines.push(`# ${manifest.name}`);
+  lines.push("");
+  lines.push("An Aves runtime skill. Do not execute the Deno script directly.");
+  lines.push("");
+  lines.push("## How to Use");
+  lines.push("");
+  lines.push("Call the `run_skill` tool from the **aves** MCP server:");
+  lines.push("");
+  lines.push("- `skill_path`: the absolute filesystem path to this directory");
+  lines.push("- `input`: JSON matching the schema defined in `skill.json` input_schema");
+  lines.push("");
+  lines.push("The authoritative TypeScript/Zod input definition is exported as `inputSchema` from `./mod.ts`.");
+  lines.push("");
+  lines.push("## Files");
+  lines.push("");
+  lines.push("- `mod.ts` - entrypoint with Zod input schema and default export");
+  lines.push("- `skill.json` - Aves manifest (permissions, signature, metadata)");
+  lines.push("- `test.ts` - Deno replay tests");
+  lines.push("- `examples.json` - sample input/output pairs");
+  lines.push("");
+  lines.push("## Notes");
+  lines.push("");
+  lines.push("- First run may trigger an approval prompt depending on `requires_approval` in `skill.json`");
+  lines.push("- This skill requires the `aves` MCP server to be configured and available");
+  lines.push("");
+  return lines.join("\n");
+}
+
+// ============================================================
 // Listing & discovery
 // ============================================================
 
@@ -211,6 +251,11 @@ export async function promoteRunToSkill(
     JSON.stringify(manifest, null, 2),
   );
 
+  await Deno.writeTextFile(
+    `${skillDir}/SKILL.md`,
+    generateSkillMarkdown(manifest),
+  );
+
   const entrypointContent = options?.entrypointContent ??
     run.code ??
     `
@@ -232,7 +277,7 @@ export default async function main(input: unknown) {
 
   if (manifest.examples && manifest.examples.length > 0) {
     const testContent = generateReplayTest(name, manifest.examples.slice(0, 2));
-    await Deno.writeTextFile(`${skillDir}/${name}_test.ts`, testContent);
+    await Deno.writeTextFile(`${skillDir}/test.ts`, testContent);
   }
 
   run.promoted_to_skill = skillDir;
