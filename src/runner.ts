@@ -1,5 +1,6 @@
 import type { ServerPolicy } from "./policy.ts";
 import { resolvePermissions } from "./policy.ts";
+import { getAvesConfigDir, getAvesDataDir, getAvesStateDir } from "./paths.ts";
 import type { Permissions, RunRecord, RunRequest } from "./types.ts";
 import {
   hashManifest,
@@ -24,6 +25,14 @@ function buildPermissionFlags(permissions: Permissions): string[] {
     flags.push(`--allow-env=${permissions.env.join(",")}`);
   }
   return flags;
+}
+
+function buildDenyFlags(avesPaths: string[]): string[] {
+  if (avesPaths.length === 0) return [];
+  return [
+    `--deny-write=${avesPaths.join(",")}`,
+    `--deny-read=${avesPaths.join(",")}`,
+  ];
 }
 
 function mergePermissions(base: Permissions, extra: Permissions): Permissions {
@@ -81,7 +90,25 @@ async function runModuleInSandbox(
   }
 
   const permFlags = buildPermissionFlags(safePerms);
-  const args = ["run", "--no-prompt", ...permFlags, BOOT_PATH, realModulePath];
+
+  // Aves internal paths — explicitly denied even if allowlist overlaps
+  const avesDirUrl = new URL(".", import.meta.url).pathname;
+  const avesDenyPaths = [
+    avesDirUrl,
+    getAvesDataDir(),
+    getAvesConfigDir(),
+    getAvesStateDir(),
+  ].filter(Boolean);
+  const denyFlags = buildDenyFlags(avesDenyPaths);
+
+  const args = [
+    "run",
+    "--no-prompt",
+    ...permFlags,
+    ...denyFlags,
+    BOOT_PATH,
+    realModulePath,
+  ];
 
   const cmd = new Deno.Command("deno", {
     args,
