@@ -165,7 +165,6 @@ export function resolveSkillEntrypoint(
 function generateSkillMarkdown(
   name: string,
   description: string,
-  requiresApproval: boolean,
 ): string {
   const lines: string[] = [];
   lines.push("---");
@@ -197,11 +196,7 @@ function generateSkillMarkdown(
   lines.push("");
   lines.push("## Notes");
   lines.push("");
-  if (requiresApproval) {
-    lines.push(
-      "- First run may trigger an approval prompt depending on `requires_approval` in `skill.json`",
-    );
-  }
+  lines.push("- First run will prompt for permission approval");
   lines.push(
     "- This skill requires the `aves` MCP server to be configured and available",
   );
@@ -298,7 +293,6 @@ export async function promoteRunToSkill(
     permissions: run.granted_permissions,
     input_schema: run.parsed_input ? run.input_schema_json : undefined,
     entrypoint: "./mod.ts",
-    requires_approval: true,
   };
 
   const validation = validateManifest(manifest);
@@ -326,7 +320,7 @@ export async function promoteRunToSkill(
 
   await Deno.writeTextFile(
     `${skillDir}/SKILL.md`,
-    generateSkillMarkdown(name, description, true),
+    generateSkillMarkdown(name, description),
   );
 
   const entrypointContent = options?.entrypointContent ??
@@ -392,10 +386,6 @@ export async function checkSkillApproval(
   const manifest = manifestResult.manifest;
   const mHash = await hashManifest(manifest);
 
-  if (!manifest.requires_approval) {
-    return { status: "approved" };
-  }
-
   const existing = await loadSkillApproval(skillDir);
 
   // No prior approval record
@@ -449,7 +439,7 @@ export async function approveSkill(
     manifestHash: mHash,
     contentHash: cHash,
     approvedAt: new Date().toISOString(),
-    requiresApproval: manifestResult.manifest.requires_approval,
+    requiresApproval: true,
   });
 
   return { ok: true };

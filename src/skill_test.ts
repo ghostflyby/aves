@@ -63,7 +63,6 @@ Deno.test("validateManifest - valid manifest", () => {
   });
   assertEquals(result.ok, true);
   if (result.ok) {
-    assertEquals(result.manifest.requires_approval, true);
     assertEquals(result.manifest.entrypoint, "./mod.ts");
   }
 });
@@ -89,7 +88,6 @@ Deno.test("hashManifest - deterministic", async () => {
   const manifest: SkillManifest = {
     permissions: { net: ["api.github.com"] },
     entrypoint: "./mod.ts",
-    requires_approval: true,
   };
   const h1 = await hashManifest(manifest);
   const h2 = await hashManifest(manifest);
@@ -101,12 +99,10 @@ Deno.test("hashManifest - different perms yield different hashes", async () => {
   const m1: SkillManifest = {
     permissions: {},
     entrypoint: "./mod.ts",
-    requires_approval: true,
   };
   const m2: SkillManifest = {
     permissions: { net: ["x"] },
     entrypoint: "./mod.ts",
-    requires_approval: true,
   };
   const h1 = await hashManifest(m1);
   const h2 = await hashManifest(m2);

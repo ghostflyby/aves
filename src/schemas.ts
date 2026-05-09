@@ -64,7 +64,6 @@ export const SkillManifestSchema = z.object({
   permissions: PermissionsSchema,
   input_schema: z.record(z.string(), z.unknown()).optional(),
   entrypoint: z.string().default("./mod.ts"),
-  requires_approval: z.boolean().default(true),
 });
 
 // ============================================================

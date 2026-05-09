@@ -103,9 +103,69 @@ function isElicitationApproved(
   return ElicitationResponseSchema.safeParse(result).success;
 }
 
+function describePermissions(
+  perms: Record<string, string[] | undefined>,
+): string {
+  const parts: string[] = [];
+  for (const key of ["read", "write", "net", "env"]) {
+    const vals = perms[key];
+    if (vals && vals.length > 0) {
+      parts.push(`  ${key}: ${vals.join(", ")}`);
+    }
+  }
+  return parts.length > 0 ? parts.join("\n") : "(none)";
+}
+
 // ============================================================
 // Request handlers — all input validated with Zod .safeParse()
 // ============================================================
+
+async function elicitScriptApproval(
+  mode: string,
+  permissions: Record<string, string[] | undefined>,
+): Promise<boolean> {
+  const server = _mcpServer;
+  if (!server) return false;
+
+  const permsDesc = describePermissions(permissions);
+  const msg =
+    permissions && Object.values(permissions).some((v) => v && v.length > 0)
+      ? [
+        `Approve script execution?`,
+        `Mode: ${mode}`,
+        ``,
+        `Requested permissions:`,
+        permsDesc,
+      ].join("\n")
+      : [
+        `Approve script execution?`,
+        `Mode: ${mode}`,
+        ``,
+        `No special permissions requested.`,
+      ].join("\n");
+
+  const result = await server.request(
+    {
+      method: "elicitation/create",
+      params: {
+        mode: "form",
+        message: msg,
+        requestedSchema: {
+          type: "object",
+          properties: {
+            approved: {
+              type: "boolean",
+              title: "Approve",
+              description: "Approve execution of this script",
+            },
+          },
+        },
+      },
+    },
+    ElicitationResponseSchema,
+  );
+  return isElicitationApproved(result);
+}
 
 async function handleRunScript(args: Record<string, unknown>) {
   const result = RunRequestSchema.safeParse(args);
@@ -115,6 +175,20 @@ async function handleRunScript(args: Record<string, unknown>) {
       result.error.issues
         .map((i) => `${i.path.join(".")}: ${i.message}`).join("; "),
     );
+  }
+
+  if (
+    !await elicitScriptApproval(result.data.mode, result.data.permissions ?? {})
+  ) {
+    return {
+      content: [{
+        type: "text",
+        text: JSON.stringify({
+          ok: false,
+          error: "Script execution rejected by user",
+        }),
+      }],
+    };
   }
 
   const record = await executeRun(result.data);
@@ -189,6 +263,13 @@ async function handleRunSkill(args: Record<string, unknown>) {
             `Skill content has changed since last approval.`,
             `Path: ${skill_path}`,
             ``,
+            ...(permissions
+              ? [
+                `Permissions override (shrink):`,
+                describePermissions(permissions),
+                ``,
+              ]
+              : []),
             `Permissions are unchanged. Continue execution?`,
           ].join("\n"),
           requestedSchema: {
@@ -245,7 +326,14 @@ async function handleRunSkill(args: Record<string, unknown>) {
             `Approve skill execution?`,
             `Path: ${skill_path}`,
             ``,
-            `This will execute a skill in a sandboxed Deno environment with its declared permissions.`,
+            `This skill will execute in a sandboxed Deno environment.`,
+            ...(permissions
+              ? [
+                ``,
+                `Agent permissions override:`,
+                describePermissions(permissions),
+              ]
+              : []),
           ].join("\n"),
           requestedSchema: {
             type: "object",
@@ -278,6 +366,54 @@ async function handleRunSkill(args: Record<string, unknown>) {
     const approveResult = await approveSkill(skill_path);
     if (!approveResult.ok) {
       throw new McpError(ErrorCode.InternalError, approveResult.error);
+    }
+  }
+
+  // If skill has override permissions, ask for confirmation
+  if (
+    permissions &&
+    (permissions.read?.length ?? 0) + (permissions.write?.length ?? 0) +
+          (permissions.net?.length ?? 0) + (permissions.env?.length ?? 0) > 0
+  ) {
+    const server = _mcpServer;
+    if (!server) {
+      throw new McpError(ErrorCode.InternalError, "MCP server not initialized");
+    }
+    const result = await server.request(
+      {
+        method: "elicitation/create",
+        params: {
+          mode: "form",
+          message: [
+            `Skill is approved, but agent requested a permissions override:`,
+            describePermissions(permissions),
+            ``,
+            `Continue with restricted permissions?`,
+          ].join("\n"),
+          requestedSchema: {
+            type: "object",
+            properties: {
+              approved: {
+                type: "boolean",
+                title: "Allow",
+                description: "Allow execution with restricted permissions",
+              },
+            },
+          },
+        },
+      },
+      ElicitationResponseSchema,
+    );
+    if (!isElicitationApproved(result)) {
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            ok: false,
+            error: "Permissions override rejected by user",
+          }),
+        }],
+      };
     }
   }
 

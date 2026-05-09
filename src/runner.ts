@@ -284,9 +284,9 @@ export async function executeSkillRun(
     const base = manifest.permissions[key] ?? [];
     const over = override[key] ?? [];
     if (over.length > 0) {
-      effectivePerms[key] = base.filter((p) => over.includes(p));
-      if (effectivePerms[key]!.length === 0 && over.length > 0) {
-        effectivePerms[key] = over;
+      const shrunk = base.filter((p) => over.includes(p));
+      if (shrunk.length > 0) {
+        effectivePerms[key] = shrunk;
       }
     } else if (base.length > 0) {
       effectivePerms[key] = base;
