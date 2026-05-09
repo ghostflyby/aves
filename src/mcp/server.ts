@@ -29,7 +29,7 @@ import {
 import {
   ListRunsInputSchema,
   PromoteToSkillInputSchema,
-  QuerySqliteInputSchema,
+  QueryRunsInputSchema,
   ReplayRunInputSchema,
   RunScriptInputSchema,
   RunSkillInputSchema,
@@ -90,11 +90,11 @@ const LIST_SKILLS_TOOL = {
   annotations: { readOnlyHint: true },
 };
 
-const QUERY_SQLITE_TOOL = {
-  name: "query_sqlite",
+const QUERY_RUNS_TOOL = {
+  name: "query_runs",
   description:
-    `Run a read-only SQL query against the Aves SQLite database. Only SELECT and PRAGMA statements are allowed.\n\nTable schema:\nCREATE TABLE runs (${RUNS_TABLE_DDL})`,
-  inputSchema: QuerySqliteInputSchema.toJSONSchema(),
+    `Query Aves run records and skill approvals using read-only SQL (SELECT/PRAGMA only).\n\nTable schema:\nCREATE TABLE runs (${RUNS_TABLE_DDL})`,
+  inputSchema: QueryRunsInputSchema.toJSONSchema(),
   annotations: { readOnlyHint: true },
 };
 
@@ -507,12 +507,12 @@ async function handlePromoteToSkill(args: Record<string, unknown>) {
   return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
 }
 
-async function handleQuerySqlite(args?: Record<string, unknown>) {
-  const parsed = args ? QuerySqliteInputSchema.safeParse(args) : null;
+async function handleQueryRuns(args?: Record<string, unknown>) {
+  const parsed = args ? QueryRunsInputSchema.safeParse(args) : null;
   if (!parsed?.success) {
     throw new McpError(
       ErrorCode.InvalidParams,
-      "query_sqlite requires valid params",
+      "query_runs requires valid params",
     );
   }
 
@@ -523,13 +523,13 @@ async function handleQuerySqlite(args?: Record<string, unknown>) {
   if (!isSelect && !isPragma) {
     throw new McpError(
       ErrorCode.InvalidParams,
-      "query_sqlite only allows SELECT and PRAGMA statements",
+      "query_runs only allows SELECT and PRAGMA statements",
     );
   }
 
   // Execute via pooled Worker
-  const { querySqlite } = await import("./query-pool.ts");
-  const result = await querySqlite(
+  const { queryRuns } = await import("./query-pool.ts");
+  const result = await queryRuns(
     parsed.data.sql,
     parsed.data.params,
     parsed.data.timeout_ms,
@@ -583,7 +583,7 @@ export async function startHttpServer(
       SUGGEST_SKILLS_TOOL,
       PROMOTE_TO_SKILL_TOOL,
       LIST_SKILLS_TOOL,
-      QUERY_SQLITE_TOOL,
+      QUERY_RUNS_TOOL,
     ],
   }));
 
@@ -606,8 +606,8 @@ export async function startHttpServer(
           return await handlePromoteToSkill(args ?? {});
         case "list_skills":
           return await handleListSkills();
-        case "query_sqlite":
-          return await handleQuerySqlite(args ?? {});
+        case "query_runs":
+          return await handleQueryRuns(args ?? {});
         default:
           throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
       }
@@ -656,7 +656,7 @@ export async function startServer() {
       SUGGEST_SKILLS_TOOL,
       PROMOTE_TO_SKILL_TOOL,
       LIST_SKILLS_TOOL,
-      QUERY_SQLITE_TOOL,
+      QUERY_RUNS_TOOL,
     ],
   }));
 
@@ -680,8 +680,8 @@ export async function startServer() {
           return await handlePromoteToSkill(args ?? {});
         case "list_skills":
           return await handleListSkills();
-        case "query_sqlite":
-          return await handleQuerySqlite(args ?? {});
+        case "query_runs":
+          return await handleQueryRuns(args ?? {});
         default:
           throw new McpError(
             ErrorCode.MethodNotFound,

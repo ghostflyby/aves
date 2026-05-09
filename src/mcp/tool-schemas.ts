@@ -69,7 +69,7 @@ export const ListRunsInputSchema = z.object({
   order_dir: z.enum(["asc", "desc"]).default("desc").describe("Sort direction"),
 });
 
-export const QuerySqliteInputSchema = z.object({
+export const QueryRunsInputSchema = z.object({
   sql: z.string().describe("Read-only SQL query (SELECT/PRAGMA only)"),
   params: z.array(z.union([z.string(), z.number(), z.null()])).optional()
     .describe("Query parameters for prepared statement"),
@@ -84,4 +84,4 @@ export type RunSkillInput = z.infer<typeof RunSkillInputSchema>;
 export type SuggestSkillsInput = z.infer<typeof SuggestSkillsInputSchema>;
 export type PromoteToSkillInput = z.infer<typeof PromoteToSkillInputSchema>;
 export type ListRunsInput = z.infer<typeof ListRunsInputSchema>;
-export type QuerySqliteInput = z.infer<typeof QuerySqliteInputSchema>;
+export type QueryRunsInput = z.infer<typeof QueryRunsInputSchema>;
