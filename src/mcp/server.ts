@@ -103,22 +103,28 @@ function isElicitationApproved(
   return ElicitationResponseSchema.safeParse(result).success;
 }
 
-function describePermissions(
-  perms: Record<string, string[] | undefined>,
-): string {
-  const parts: string[] = [];
-  for (const key of ["read", "write", "net", "env"]) {
-    const vals = perms[key];
-    if (vals && vals.length > 0) {
-      parts.push(`  ${key}: ${vals.join(", ")}`);
-    }
-  }
-  return parts.length > 0 ? parts.join("\n") : "(none)";
-}
-
 // ============================================================
 // Request handlers — all input validated with Zod .safeParse()
 // ============================================================
+
+/** Build readOnly permission display fields for an elicitation requestedSchema. */
+function permSchemaFields(
+  permissions: Record<string, string[] | undefined>,
+): Record<string, unknown> {
+  const props: Record<string, unknown> = {};
+  for (const key of ["read", "write", "net", "env"]) {
+    const vals = permissions[key];
+    if (vals && vals.length > 0) {
+      props[`perm_${key}`] = {
+        type: "string",
+        title: key,
+        readOnly: true,
+        default: vals.join(", "),
+      };
+    }
+  }
+  return props;
+}
 
 async function elicitScriptApproval(
   mode: string,
@@ -127,36 +133,24 @@ async function elicitScriptApproval(
   const server = _mcpServer;
   if (!server) return false;
 
-  const permsDesc = describePermissions(permissions);
-  const msg =
-    permissions && Object.values(permissions).some((v) => v && v.length > 0)
-      ? [
-        `Approve script execution?`,
-        `Mode: ${mode}`,
-        ``,
-        `Requested permissions:`,
-        permsDesc,
-      ].join("\n")
-      : [
-        `Approve script execution?`,
-        `Mode: ${mode}`,
-        ``,
-        `No special permissions requested.`,
-      ].join("\n");
+  const modeLabel = mode === "eval" ? "Eval" : "Module";
+
+  const permsProps = permSchemaFields(permissions);
 
   const result = await server.request(
     {
       method: "elicitation/create",
       params: {
         mode: "form",
-        message: msg,
+        message: `Approve ${modeLabel} script execution?`,
         requestedSchema: {
           type: "object",
           properties: {
+            ...permsProps,
             approved: {
               type: "boolean",
               title: "Approve",
-              description: "Approve execution of this script",
+              description: "Approve execution with the listed permissions",
             },
           },
         },
@@ -259,22 +253,18 @@ async function handleRunSkill(args: Record<string, unknown>) {
         method: "elicitation/create",
         params: {
           mode: "form",
-          message: [
-            `Skill content has changed since last approval.`,
-            `Path: ${skill_path}`,
-            ``,
-            ...(permissions
-              ? [
-                `Permissions override (shrink):`,
-                describePermissions(permissions),
-                ``,
-              ]
-              : []),
-            `Permissions are unchanged. Continue execution?`,
-          ].join("\n"),
+          message:
+            `Skill content has changed since last approval. Continue with same permissions?`,
           requestedSchema: {
             type: "object",
             properties: {
+              skill_path: {
+                type: "string",
+                title: "Skill",
+                readOnly: true,
+                default: skill_path,
+              },
+              ...(permissions ? permSchemaFields(permissions) : {}),
               approved: {
                 type: "boolean",
                 title: "Continue",
@@ -322,22 +312,17 @@ async function handleRunSkill(args: Record<string, unknown>) {
         method: "elicitation/create",
         params: {
           mode: "form",
-          message: [
-            `Approve skill execution?`,
-            `Path: ${skill_path}`,
-            ``,
-            `This skill will execute in a sandboxed Deno environment.`,
-            ...(permissions
-              ? [
-                ``,
-                `Agent permissions override:`,
-                describePermissions(permissions),
-              ]
-              : []),
-          ].join("\n"),
+          message: `Approve skill execution?`,
           requestedSchema: {
             type: "object",
             properties: {
+              skill_path: {
+                type: "string",
+                title: "Skill",
+                readOnly: true,
+                default: skill_path,
+              },
+              ...(permissions ? permSchemaFields(permissions) : {}),
               approved: {
                 type: "boolean",
                 title: "Approve",
@@ -384,15 +369,35 @@ async function handleRunSkill(args: Record<string, unknown>) {
         method: "elicitation/create",
         params: {
           mode: "form",
-          message: [
-            `Skill is approved, but agent requested a permissions override:`,
-            describePermissions(permissions),
-            ``,
-            `Continue with restricted permissions?`,
-          ].join("\n"),
+          message:
+            `Skill is approved, but agent requests a permissions override. Continue?`,
           requestedSchema: {
             type: "object",
             properties: {
+              override_read: {
+                type: "string",
+                title: "Read",
+                readOnly: true,
+                default: (permissions.read ?? []).join(", ") || "(none)",
+              },
+              override_write: {
+                type: "string",
+                title: "Write",
+                readOnly: true,
+                default: (permissions.write ?? []).join(", ") || "(none)",
+              },
+              override_net: {
+                type: "string",
+                title: "Net",
+                readOnly: true,
+                default: (permissions.net ?? []).join(", ") || "(none)",
+              },
+              override_env: {
+                type: "string",
+                title: "Env",
+                readOnly: true,
+                default: (permissions.env ?? []).join(", ") || "(none)",
+              },
               approved: {
                 type: "boolean",
                 title: "Allow",
