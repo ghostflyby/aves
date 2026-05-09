@@ -71,7 +71,7 @@ export async function handleReadResource(uri: string): Promise<{
       contents: [{
         uri,
         mimeType: "text/plain",
-        text: `CREATE TABLE runs (\n${RUNS_TABLE_DDL})`,
+        text: RUNS_TABLE_DDL,
       }],
     };
   }

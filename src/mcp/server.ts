@@ -101,7 +101,7 @@ const LIST_SKILLS_TOOL = {
 const QUERY_RUNS_TOOL = {
   name: "query_runs",
   description:
-    `Query Aves run records and skill approvals using read-only SQL (SELECT/PRAGMA only).\n\nTable schema:\nCREATE TABLE runs (${RUNS_TABLE_DDL})`,
+    `Query Aves run records and skill approvals using read-only SQL (SELECT/PRAGMA only).\n\nTable schema:\n${RUNS_TABLE_DDL}`,
   inputSchema: QueryRunsInputSchema.toJSONSchema(),
   annotations: { readOnlyHint: true },
 };

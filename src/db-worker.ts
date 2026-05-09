@@ -14,25 +14,27 @@ import { RUNS_TABLE_DDL } from "./db-schema.ts";
 const db = new DatabaseSync(getAvesDbPath());
 db.exec("PRAGMA journal_mode=WAL");
 
-db.exec(`CREATE TABLE IF NOT EXISTS runs (${RUNS_TABLE_DDL})`);
+db.exec(RUNS_TABLE_DDL);
 
 // Migrate: add new columns if missing
 for (const col of ["input_schema_json TEXT", "code TEXT"]) {
   try {
-    db.exec(`ALTER TABLE runs ADD COLUMN ${col}`);
+    db.exec(`ALTER TABLE runs
+            ADD COLUMN ${col}`);
   } catch {
     // Column already exists
   }
 }
 
 db.exec(`
-  CREATE TABLE IF NOT EXISTS skill_approvals (
-    skill_path TEXT PRIMARY KEY,
-    manifest_hash TEXT NOT NULL,
-    content_hash TEXT,
-    approved_at TEXT NOT NULL,
-    requires_approval BOOLEAN DEFAULT true
-  )
+    CREATE TABLE IF NOT EXISTS skill_approvals
+    (
+        skill_path        TEXT PRIMARY KEY,
+        manifest_hash     TEXT NOT NULL,
+        content_hash      TEXT,
+        approved_at       TEXT NOT NULL,
+        requires_approval BOOLEAN DEFAULT true
+    )
 `);
 
 db.exec("CREATE INDEX IF NOT EXISTS idx_runs_mode ON runs(mode)");
@@ -109,20 +111,20 @@ const handlers: Record<string, (...args: unknown[]) => unknown> = {
     // deno-lint-ignore no-explicit-any
     const record = recordArr[0] as any;
     const r = record;
-    db.prepare(`
-      INSERT OR REPLACE INTO runs
-        (run_id, mode, code_hash, schema_hash,
-         raw_input, parsed_input, permissions, granted_permissions, denied_permissions,
-         stdout, stderr, exit_code, output, error,
-         started_at, finished_at, duration_ms,
-         project_path, promoted_to_skill, skill_path,
-         input_schema_json, code)
-      VALUES (?, ?, ?, ?,
-              ?, ?, ?, ?, ?,
-              ?, ?, ?, ?, ?,
-              ?, ?, ?,
-              ?, ?, ?,
-              ?, ?)
+    db.prepare(`INSERT OR
+REPLACE INTO runs
+(run_id, mode, code_hash, schema_hash,
+ raw_input, parsed_input, permissions, granted_permissions, denied_permissions,
+ stdout, stderr, exit_code, output, error,
+ started_at, finished_at, duration_ms,
+ project_path, promoted_to_skill, skill_path,
+ input_schema_json, code)
+VALUES (?, ?, ?, ?,
+        ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?,
+        ?, ?, ?,
+        ?, ?, ?,
+        ?, ?)
     `).run(
       r.run_id,
       r.mode,
@@ -216,10 +218,12 @@ const handlers: Record<string, (...args: unknown[]) => unknown> = {
     // deno-lint-ignore no-explicit-any
     const a = approvalArr[0] as any;
     db.prepare(`
-      INSERT OR REPLACE INTO skill_approvals
-        (skill_path, manifest_hash, content_hash, approved_at, requires_approval)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(
+            INSERT OR
+            REPLACE
+            INTO skill_approvals
+            (skill_path, manifest_hash, content_hash, approved_at, requires_approval)
+            VALUES (?, ?, ?, ?, ?)
+        `).run(
       a.skillPath,
       a.manifestHash,
       a.contentHash ?? null,
