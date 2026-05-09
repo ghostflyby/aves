@@ -108,9 +108,7 @@ function rowToRecord(row: Record<string, unknown>): Record<string, unknown> {
 
 const handlers: Record<string, (...args: unknown[]) => unknown> = {
   saveRun(...recordArr: unknown[]) {
-    // deno-lint-ignore no-explicit-any
-    const record = recordArr[0] as any;
-    const r = record;
+    const r = recordArr[0] as Record<string, unknown>;
     db.prepare(`INSERT OR
 REPLACE INTO runs
 (run_id, mode, code_hash, schema_hash,
@@ -167,8 +165,7 @@ VALUES (?, ?, ?, ?,
 
   listRunsFiltered(...filtersArr: unknown[]) {
     // deno-lint-ignore no-explicit-any
-    const filters = filtersArr[0] as any;
-    const f = filters;
+    const f = filtersArr[0] as any;
     const where: string[] = [];
     // deno-lint-ignore no-explicit-any
     const values: any[] = [];

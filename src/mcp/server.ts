@@ -629,8 +629,7 @@ export async function startHttpServer(
   );
   mcpServer.setRequestHandler(
     ReadResourceRequestSchema,
-    async (req: { params: { uri: string } }) =>
-      handleReadResource(req.params.uri),
+    (req: { params: { uri: string } }) => handleReadResource(req.params.uri),
   );
 
   await mcpServer.connect(transport);
@@ -718,8 +717,7 @@ export async function startServer() {
   );
   server.setRequestHandler(
     ReadResourceRequestSchema,
-    async (req: { params: { uri: string } }) =>
-      handleReadResource(req.params.uri),
+    (req: { params: { uri: string } }) => handleReadResource(req.params.uri),
   );
 
   await server.connect(transport);
