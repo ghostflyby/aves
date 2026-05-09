@@ -3,13 +3,12 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import {
   type CallToolRequest,
   CallToolRequestSchema,
-  ElicitResultSchema,
   ErrorCode,
   ListToolsRequestSchema,
   McpError,
 } from "@modelcontextprotocol/sdk/types.js";
-import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { z } from "zod";
+import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { executeRun, executeSkillRun } from "../runner.ts";
 import {
   findClusteredRuns,
@@ -92,17 +91,14 @@ const LIST_SKILLS_TOOL = {
 let _mcpServer: Server | null = null;
 
 const ElicitationResponseSchema = z.object({
-  action: z.literal("accept"),
-  content: z.object({
-    approved: z.boolean(),
-  }).optional(),
+  action: z.string(),
 });
 
 function isElicitationApproved(
   result: unknown,
-): result is z.infer<typeof ElicitationResponseSchema> {
-  const parsed = ElicitationResponseSchema.safeParse(result);
-  return parsed.success && parsed.data.content?.approved === true;
+): boolean {
+  const r = result as Record<string, unknown>;
+  return r?.action === "accept";
 }
 
 // ============================================================
@@ -153,7 +149,7 @@ async function elicitScriptApproval(
         },
       },
     },
-    ElicitResultSchema,
+    ElicitationResponseSchema,
   );
   return isElicitationApproved(result);
 }
@@ -259,17 +255,11 @@ async function handleRunSkill(args: Record<string, unknown>) {
           ].join("\n"),
           requestedSchema: {
             type: "object",
-            properties: {
-              approved: {
-                type: "boolean",
-                title: "Continue",
-                description: "Continue execution with the updated content",
-              },
-            },
+            properties: {},
           },
         },
       },
-      ElicitResultSchema,
+      ElicitationResponseSchema,
     );
 
     if (!isElicitationApproved(elicitResult)) {
@@ -317,17 +307,11 @@ async function handleRunSkill(args: Record<string, unknown>) {
           ].join("\n"),
           requestedSchema: {
             type: "object",
-            properties: {
-              approved: {
-                type: "boolean",
-                title: "Approve",
-                description: "Approve execution of this skill",
-              },
-            },
+            properties: {},
           },
         },
       },
-      ElicitResultSchema,
+      ElicitationResponseSchema,
     );
 
     if (!isElicitationApproved(elicitResult)) {
@@ -372,17 +356,11 @@ async function handleRunSkill(args: Record<string, unknown>) {
           ].join("\n"),
           requestedSchema: {
             type: "object",
-            properties: {
-              approved: {
-                type: "boolean",
-                title: "Allow",
-                description: "Allow execution with restricted permissions",
-              },
-            },
+            properties: {},
           },
         },
       },
-      ElicitResultSchema,
+      ElicitationResponseSchema,
     );
     if (!isElicitationApproved(result)) {
       return {
