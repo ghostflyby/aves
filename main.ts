@@ -8,6 +8,7 @@ import {
   releaseLock,
 } from "./src/server-registry.ts";
 import { closeDb } from "./src/run-store.ts";
+import { disposePool } from "./src/mcp/query-pool.ts";
 
 // ============================================================
 // Cleanup — runs on SIGINT, SIGTERM, and process exit
@@ -22,6 +23,7 @@ function registerCleanup() {
   const cleanup = () => {
     cleanupAll().catch(() => {});
     closeDb();
+    disposePool();
   };
 
   // Graceful shutdown on signals
@@ -102,6 +104,7 @@ async function cmdStdio() {
   registerCleanup();
   await startServer();
   closeDb();
+  disposePool();
 }
 
 /**
