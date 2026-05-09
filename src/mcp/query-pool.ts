@@ -76,6 +76,8 @@ function createWorker(): Worker {
           // Database directory — worker opens aves.db here
           getAvesDataDir(),
         ],
+        env: ["AVES_DATA_DIR", "XDG_DATA_HOME", "LocalAppData"],
+        sys: ["homedir"],
       },
     },
   });

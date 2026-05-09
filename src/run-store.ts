@@ -1,4 +1,5 @@
 import type { RunRecord } from "./types.ts";
+import { getAvesDataDir } from "./paths.ts";
 
 // ============================================================
 // Database Worker communication
@@ -6,6 +7,10 @@ import type { RunRecord } from "./types.ts";
 
 let _worker: Worker | null = null;
 let _nextId = 0;
+
+function getProjectRoot(): string {
+  return new URL("../../", import.meta.url).pathname;
+}
 
 function getWorkerUrl(): string {
   return new URL("./db-worker.ts", import.meta.url).href;
@@ -18,9 +23,10 @@ function callWorker<T>(op: string, ...args: unknown[]): Promise<T> {
         type: "module",
         deno: {
           permissions: {
-            read: true,
-            write: true,
-            env: true,
+            read: [getProjectRoot(), getAvesDataDir()],
+            write: [getAvesDataDir()],
+            env: ["AVES_DATA_DIR", "XDG_DATA_HOME", "LocalAppData"],
+            sys: ["homedir"],
           },
         },
       });
