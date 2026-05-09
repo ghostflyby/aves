@@ -139,6 +139,7 @@ async function elicitScriptApproval(
 
   const modeLabel = mode === "eval" ? "Eval" : "Module";
   const hasPerms = Object.values(permissions).some((v) => v && v.length > 0);
+  if (!hasPerms) return true; // no permissions = no need to ask
   const msg = hasPerms
     ? `Approve ${modeLabel} script execution?\n\nRequested permissions:\n${
       permsDesc(permissions)
