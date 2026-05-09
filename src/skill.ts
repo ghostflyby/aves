@@ -95,37 +95,38 @@ export function resolveSkillEntrypoint(
 // SKILL.md generation
 // ============================================================
 
-function generateSkillMarkdown(manifest: SkillManifest): string {
+function generateSkillMarkdown(
+  name: string,
+  description: string,
+  requiresApproval: boolean,
+): string {
   const lines: string[] = [];
   lines.push("---");
-  lines.push(`name: ${manifest.name}`);
-  lines.push(`description: "${manifest.description}. Requires the Aves MCP server to be configured and available. Call \`run_skill\` with the skill_path set to this directory."`);
+  lines.push(`name: ${name}`);
+  lines.push(`description: "${description}. Requires the Aves MCP server \u2014 use the \`run_skill\` tool with skill_path set to this directory."`);
   lines.push("aves: true");
   lines.push("---");
   lines.push("");
-  lines.push(`# ${manifest.name}`);
+  lines.push(`# ${name}`);
   lines.push("");
   lines.push("An Aves runtime skill. Do not execute the Deno script directly.");
   lines.push("");
   lines.push("## How to Use");
   lines.push("");
-  lines.push("Call the `run_skill` tool from the **aves** MCP server:");
+  lines.push("Call the `run_skill` MCP tool from the **aves** server:");
   lines.push("");
-  lines.push("- `skill_path`: the absolute filesystem path to this directory");
-  lines.push("- `input`: JSON matching the schema defined in `skill.json` input_schema");
+  lines.push("- `skill_path`: absolute path to this directory");
+  lines.push("- `input`: JSON matching the schema in `skill.json` \u2192 `input_schema`");
   lines.push("");
-  lines.push("The authoritative TypeScript/Zod input definition is exported as `inputSchema` from `./mod.ts`.");
+  lines.push("The Zod input definition is exported as `inputSchema` from `./mod.ts`.");
   lines.push("");
-  lines.push("## Files");
-  lines.push("");
-  lines.push("- `mod.ts` - entrypoint with Zod input schema and default export");
-  lines.push("- `skill.json` - Aves manifest (permissions, signature, metadata)");
-  lines.push("- `test.ts` - Deno replay tests");
-  lines.push("- `examples.json` - sample input/output pairs");
+  lines.push("See `./examples.json` for sample input/output pairs.");
   lines.push("");
   lines.push("## Notes");
   lines.push("");
-  lines.push("- First run may trigger an approval prompt depending on `requires_approval` in `skill.json`");
+  if (requiresApproval) {
+    lines.push("- First run may trigger an approval prompt depending on `requires_approval` in `skill.json`");
+  }
   lines.push("- This skill requires the `aves` MCP server to be configured and available");
   lines.push("");
   return lines.join("\n");
@@ -157,7 +158,7 @@ export async function listSkills(): Promise<SkillInfo[]> {
         const result = await loadSkillManifest(skillDir);
         if (result.ok) {
           skills.push({
-            name: result.manifest.name,
+            name: entry.name,
             path: skillDir,
             manifest: result.manifest,
             manifestHash: await hashManifest(result.manifest),
@@ -216,16 +217,11 @@ export async function promoteRunToSkill(
     };
   }
 
-  const manifest: SkillManifest = {
-    name,
-    description,
+  const manifest = {
     permissions: run.granted_permissions,
     input_schema: run.parsed_input ? run.input_schema_json : undefined,
     entrypoint: "./mod.ts",
     requires_approval: true,
-    examples: run.raw_input && run.output !== undefined
-      ? [{ input: run.raw_input, output: run.output }]
-      : undefined,
   };
 
   const validation = validateManifest(manifest);
@@ -253,7 +249,7 @@ export async function promoteRunToSkill(
 
   await Deno.writeTextFile(
     `${skillDir}/SKILL.md`,
-    generateSkillMarkdown(manifest),
+    generateSkillMarkdown(name, description, true),
   );
 
   const entrypointContent = options?.entrypointContent ??
@@ -268,15 +264,19 @@ export default async function main(input: unknown) {
 `;
   await Deno.writeTextFile(`${skillDir}/mod.ts`, entrypointContent.trimStart());
 
-  if (manifest.examples && manifest.examples.length > 0) {
+  const example = run.raw_input && run.output !== undefined
+    ? { input: run.raw_input, output: run.output }
+    : null;
+
+  if (example) {
     await Deno.writeTextFile(
       `${skillDir}/examples.json`,
-      JSON.stringify(manifest.examples, null, 2),
+      JSON.stringify([example], null, 2),
     );
   }
 
-  if (manifest.examples && manifest.examples.length > 0) {
-    const testContent = generateReplayTest(name, manifest.examples.slice(0, 2));
+  if (example) {
+    const testContent = generateReplayTest(name, [example]);
     await Deno.writeTextFile(`${skillDir}/test.ts`, testContent);
   }
 

@@ -59,46 +59,37 @@ Deno.test("parseConfig - missing file returns defaults", async () => {
 
 Deno.test("validateManifest - valid manifest", () => {
   const result = validateManifest({
-    name: "test_skill",
-    description: "A test skill",
-    entrypoint: "./mod.ts",
-    requires_approval: true,
     permissions: { net: ["api.github.com"] },
   });
   assertEquals(result.ok, true);
   if (result.ok) {
-    assertEquals(result.manifest.name, "test_skill");
-    assertEquals(result.manifest.requires_approval, true); // default
-    assertEquals(result.manifest.entrypoint, "./mod.ts"); // default
+    assertEquals(result.manifest.requires_approval, true);
+    assertEquals(result.manifest.entrypoint, "./mod.ts");
   }
 });
 
-Deno.test("validateManifest - name can have hyphens", () => {
+Deno.test("validateManifest - valid with all optional fields", () => {
   const result = validateManifest({
     name: "github-issue-fetch",
     description: "Fetch GitHub issues",
-    entrypoint: "./mod.ts",
-    requires_approval: true,
     permissions: {},
   });
   assertEquals(result.ok, true);
 });
 
-Deno.test("validateManifest - missing required fields", () => {
-  const result = validateManifest({ name: "test" });
+Deno.test("validateManifest - missing permissions", () => {
+  const result = validateManifest({});
   assertEquals(result.ok, false);
   if (!result.ok) {
-    assertStringIncludes(result.error, "description");
+    assertStringIncludes(result.error, "permissions");
   }
 });
 
 Deno.test("hashManifest - deterministic", async () => {
   const manifest: SkillManifest = {
-    name: "test",
-    description: "desc",
+    permissions: { net: ["api.github.com"] },
     entrypoint: "./mod.ts",
     requires_approval: true,
-    permissions: { net: ["api.github.com"] },
   };
   const h1 = await hashManifest(manifest);
   const h2 = await hashManifest(manifest);
@@ -108,15 +99,11 @@ Deno.test("hashManifest - deterministic", async () => {
 
 Deno.test("hashManifest - different perms yield different hashes", async () => {
   const m1: SkillManifest = {
-    name: "t",
-    description: "d",
     permissions: {},
     entrypoint: "./mod.ts",
     requires_approval: true,
   };
   const m2: SkillManifest = {
-    name: "t",
-    description: "d",
     permissions: { net: ["x"] },
     entrypoint: "./mod.ts",
     requires_approval: true,
@@ -181,17 +168,11 @@ Deno.test("promoteRunToSkill - creates skill files on disk", async () => {
     assertStringIncludes(skMdContent, "run_skill");
     assertStringIncludes(skMdContent, "skill_path");
     assertStringIncludes(skMdContent, "skill.json");
+    assertStringIncludes(skMdContent, "examples.json");
 
     // Verify manifest content
     const manifestResult = await loadSkillManifest(result.skillDir);
     assertEquals(manifestResult.ok, true);
-    if (manifestResult.ok) {
-      assertEquals(manifestResult.manifest.name, "test-promote-skill");
-      assertEquals(
-        manifestResult.manifest.description,
-        "A promoted test skill",
-      );
-    }
   }
 
   // Cleanup

@@ -60,14 +60,11 @@ export const RunRecordSchema = z.object({
 });
 
 export const SkillManifestSchema = z.object({
-  name: z.string(),
-  description: z.string(),
   version: z.string().optional(),
   permissions: PermissionsSchema,
   input_schema: z.record(z.string(), z.unknown()).optional(),
   entrypoint: z.string().default("./mod.ts"),
   requires_approval: z.boolean().default(true),
-  examples: z.array(z.unknown()).optional(),
 });
 
 // ============================================================
