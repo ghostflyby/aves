@@ -46,8 +46,42 @@ export const PromoteToSkillInputSchema = z.object({
   description: z.string().describe("Human-readable skill description"),
 });
 
+export const ListRunsInputSchema = z.object({
+  mode: z.enum(["eval", "module", "skill"]).describe("Filter by execution mode")
+    .optional(),
+  schema_hash: z.string().describe("Filter by exact schema hash").optional(),
+  has_schema: z.boolean().describe("Filter runs with/without schema_hash")
+    .optional(),
+  exit_code: z.number().int().describe("Filter by exact exit code").optional(),
+  started_after: z.string().describe(
+    "ISO timestamp: only runs started at or after this time",
+  ).optional(),
+  started_before: z.string().describe(
+    "ISO timestamp: only runs started before this time",
+  ).optional(),
+  limit: z.number().int().min(1).max(1000).default(100).describe(
+    "Max records to return",
+  ),
+  offset: z.number().int().min(0).default(0).describe("Skip N records"),
+  order_by: z.enum(["started_at", "duration_ms", "exit_code", "mode"]).default(
+    "started_at",
+  ).describe("Sort column"),
+  order_dir: z.enum(["asc", "desc"]).default("desc").describe("Sort direction"),
+});
+
+export const QuerySqliteInputSchema = z.object({
+  sql: z.string().describe("Read-only SQL query (SELECT/PRAGMA only)"),
+  params: z.array(z.union([z.string(), z.number(), z.null()])).optional()
+    .describe("Query parameters for prepared statement"),
+  timeout_ms: z.number().int().min(100).max(30000).default(10000).describe(
+    "Query timeout in milliseconds",
+  ),
+});
+
 // Inferred types
 export type ReplayRunInput = z.infer<typeof ReplayRunInputSchema>;
 export type RunSkillInput = z.infer<typeof RunSkillInputSchema>;
 export type SuggestSkillsInput = z.infer<typeof SuggestSkillsInputSchema>;
 export type PromoteToSkillInput = z.infer<typeof PromoteToSkillInputSchema>;
+export type ListRunsInput = z.infer<typeof ListRunsInputSchema>;
+export type QuerySqliteInput = z.infer<typeof QuerySqliteInputSchema>;

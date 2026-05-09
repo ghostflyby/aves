@@ -14,6 +14,7 @@ import {
   findClusteredRuns,
   findRepeatedRuns,
   listRuns,
+  listRunsFiltered,
   loadRun,
   saveRun,
 } from "../run-store.ts";
@@ -25,7 +26,9 @@ import {
   promoteRunToSkill,
 } from "../skill.ts";
 import {
+  ListRunsInputSchema,
   PromoteToSkillInputSchema,
+  QuerySqliteInputSchema,
   ReplayRunInputSchema,
   RunScriptInputSchema,
   RunSkillInputSchema,
@@ -205,8 +208,9 @@ async function handleReplayRun(args: Record<string, unknown>) {
   return { content: [{ type: "text", text: JSON.stringify(record, null, 2) }] };
 }
 
-async function handleListRuns() {
-  const records = listRuns();
+async function handleListRuns(args?: Record<string, unknown>) {
+  const parsed = args ? ListRunsInputSchema.safeParse(args) : null;
+  const records = parsed?.success ? listRunsFiltered(parsed.data) : listRuns();
   return {
     content: [{ type: "text", text: JSON.stringify(records, null, 2) }],
   };
@@ -491,6 +495,37 @@ async function handlePromoteToSkill(args: Record<string, unknown>) {
   return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
 }
 
+async function handleQuerySqlite(args?: Record<string, unknown>) {
+  const parsed = args ? QuerySqliteInputSchema.safeParse(args) : null;
+  if (!parsed?.success) {
+    throw new McpError(
+      ErrorCode.InvalidParams,
+      "query_sqlite requires valid params",
+    );
+  }
+
+  // C part: direct read-only SQLite (worker pool to be added later)
+  const { DatabaseSync } = await import("node:sqlite");
+  const { getAvesDbPath } = await import("../paths.ts");
+  const db = new DatabaseSync(getAvesDbPath(), { readOnly: true });
+  try {
+    const stmt = db.prepare(parsed.data.sql);
+    const rows = parsed.data.params
+      ? stmt.all(...parsed.data.params as any)
+      : stmt.all();
+    return {
+      content: [{ type: "text", text: JSON.stringify(rows, null, 2) }],
+    };
+  } catch (err) {
+    throw new McpError(
+      ErrorCode.InternalError,
+      err instanceof Error ? err.message : String(err),
+    );
+  } finally {
+    db.close();
+  }
+}
+
 async function handleListSkills() {
   const skills = await listSkills();
   return {
@@ -552,6 +587,8 @@ export async function startHttpServer(
           return await handlePromoteToSkill(args ?? {});
         case "list_skills":
           return await handleListSkills();
+        case "query_sqlite":
+          return await handleQuerySqlite(args ?? {});
         default:
           throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
       }
@@ -623,6 +660,8 @@ export async function startServer() {
           return await handlePromoteToSkill(args ?? {});
         case "list_skills":
           return await handleListSkills();
+        case "query_sqlite":
+          return await handleQuerySqlite(args ?? {});
         default:
           throw new McpError(
             ErrorCode.MethodNotFound,

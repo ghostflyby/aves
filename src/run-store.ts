@@ -187,6 +187,71 @@ export function listRuns(): RunRecord[] {
   ).all() as Record<string, unknown>[]).map(rowToRecord);
 }
 
+export interface RunFilters {
+  mode?: string;
+  schema_hash?: string;
+  has_schema?: boolean;
+  exit_code?: number;
+  started_after?: string;
+  started_before?: string;
+  limit: number;
+  offset: number;
+  order_by: string;
+  order_dir: string;
+}
+
+export function listRunsFiltered(filters: RunFilters): RunRecord[] {
+  const where: string[] = [];
+  const values: import("node:sqlite").SQLInputValue[] = [];
+
+  if (filters.mode !== undefined) {
+    where.push("mode = ?");
+    values.push(filters.mode);
+  }
+  if (filters.schema_hash !== undefined) {
+    where.push("schema_hash = ?");
+    values.push(filters.schema_hash);
+  }
+  if (filters.has_schema !== undefined) {
+    where.push(
+      filters.has_schema ? "schema_hash IS NOT NULL" : "schema_hash IS NULL",
+    );
+  }
+  if (filters.exit_code !== undefined) {
+    where.push("exit_code = ?");
+    values.push(filters.exit_code);
+  }
+  if (filters.started_after !== undefined) {
+    where.push("started_at >= ?");
+    values.push(filters.started_after);
+  }
+  if (filters.started_before !== undefined) {
+    where.push("started_at < ?");
+    values.push(filters.started_before);
+  }
+
+  const orderCol =
+    filters.order_by === "duration_ms" || filters.order_by === "exit_code" ||
+      filters.order_by === "mode"
+      ? filters.order_by
+      : "started_at";
+  const orderDir = filters.order_dir === "asc" ? "ASC" : "DESC";
+
+  const baseSql = "SELECT * FROM runs";
+  const orderSql = `ORDER BY ${orderCol} ${orderDir}`;
+  const limitSql = "LIMIT ? OFFSET ?";
+
+  const sql = where.length > 0
+    ? `${baseSql} WHERE ${where.join(" AND ")} ${orderSql} ${limitSql}`
+    : `${baseSql} ${orderSql} ${limitSql}`;
+
+  return (getDb().prepare(sql).all(
+    ...values,
+    filters.limit,
+    filters.offset,
+  ) as Record<string, unknown>[]).map(rowToRecord);
+}
+
 /**
  * Find runs grouped by schema_hash (same Zod input schema structure).
  * Clusters of 2+ runs are skill candidates for promotion.
