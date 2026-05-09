@@ -57,7 +57,7 @@ const REPLAY_RUN_TOOL = {
 const LIST_RUNS_TOOL = {
   name: "list_runs",
   description: "List recent run records",
-  inputSchema: { type: "object" as const, properties: {} },
+  inputSchema: ListRunsInputSchema.toJSONSchema(),
   annotations: { readOnlyHint: true },
 };
 
@@ -86,6 +86,14 @@ const LIST_SKILLS_TOOL = {
   name: "list_skills",
   description: "List all discovered skills in configured roots",
   inputSchema: { type: "object" as const, properties: {} },
+  annotations: { readOnlyHint: true },
+};
+
+const QUERY_SQLITE_TOOL = {
+  name: "query_sqlite",
+  description:
+    "Run a read-only SQL query against the Aves SQLite database. Only SELECT and PRAGMA statements are allowed.",
+  inputSchema: QuerySqliteInputSchema.toJSONSchema(),
   annotations: { readOnlyHint: true },
 };
 
@@ -504,26 +512,32 @@ async function handleQuerySqlite(args?: Record<string, unknown>) {
     );
   }
 
-  // C part: direct read-only SQLite (worker pool to be added later)
-  const { DatabaseSync } = await import("node:sqlite");
-  const { getAvesDbPath } = await import("../paths.ts");
-  const db = new DatabaseSync(getAvesDbPath(), { readOnly: true });
-  try {
-    const stmt = db.prepare(parsed.data.sql);
-    const rows = parsed.data.params
-      ? stmt.all(...parsed.data.params as any)
-      : stmt.all();
-    return {
-      content: [{ type: "text", text: JSON.stringify(rows, null, 2) }],
-    };
-  } catch (err) {
+  // Enforce SELECT/PRAGMA only (defense-in-depth beyond readOnly: true)
+  const sql = parsed.data.sql.trim();
+  const isSelect = /^SELECT\b/i.test(sql);
+  const isPragma = /^PRAGMA\b/i.test(sql);
+  if (!isSelect && !isPragma) {
     throw new McpError(
-      ErrorCode.InternalError,
-      err instanceof Error ? err.message : String(err),
+      ErrorCode.InvalidParams,
+      "query_sqlite only allows SELECT and PRAGMA statements",
     );
-  } finally {
-    db.close();
   }
+
+  // Execute via pooled Worker
+  const { querySqlite } = await import("./query-pool.ts");
+  const result = await querySqlite(
+    parsed.data.sql,
+    parsed.data.params,
+    parsed.data.timeout_ms,
+  );
+
+  if (!result.ok) {
+    throw new McpError(ErrorCode.InternalError, result.error ?? "Query failed");
+  }
+
+  return {
+    content: [{ type: "text", text: JSON.stringify(result.rows, null, 2) }],
+  };
 }
 
 async function handleListSkills() {
@@ -565,6 +579,7 @@ export async function startHttpServer(
       SUGGEST_SKILLS_TOOL,
       PROMOTE_TO_SKILL_TOOL,
       LIST_SKILLS_TOOL,
+      QUERY_SQLITE_TOOL,
     ],
   }));
 
@@ -637,6 +652,7 @@ export async function startServer() {
       SUGGEST_SKILLS_TOOL,
       PROMOTE_TO_SKILL_TOOL,
       LIST_SKILLS_TOOL,
+      QUERY_SQLITE_TOOL,
     ],
   }));
 
@@ -651,7 +667,7 @@ export async function startServer() {
         case "replay_run":
           return await handleReplayRun(args ?? {});
         case "list_runs":
-          return await handleListRuns();
+          return await handleListRuns(args ?? {});
         case "run_skill":
           return await handleRunSkill(args ?? {});
         case "suggest_skills":
