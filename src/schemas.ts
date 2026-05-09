@@ -13,16 +13,19 @@ export const PermissionsSchema = z.object({
   env: z.array(z.string()).optional(),
 });
 
+const ScriptFormatDescription =
+  "TypeScript module: export default async function main(input: unknown) { ... } as entry point. Supports Zod@4, Deno/node built-ins, ES module syntax.";
+
 const EvalRunRequestSchema = z.object({
   mode: z.literal("eval"),
-  code: z.string(),
+  code: z.string().describe(ScriptFormatDescription),
   input: z.record(z.string(), z.unknown()).optional(),
   permissions: PermissionsSchema.optional(),
 });
 
 const ModuleRunRequestSchema = z.object({
   mode: z.literal("module"),
-  code: z.string().optional(),
+  code: z.string().describe(ScriptFormatDescription).optional(),
   modulePath: z.string(),
   input: z.record(z.string(), z.unknown()).optional(),
   permissions: PermissionsSchema.optional(),
