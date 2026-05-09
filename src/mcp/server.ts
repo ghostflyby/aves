@@ -3,6 +3,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import {
   type CallToolRequest,
   CallToolRequestSchema,
+  ElicitResultSchema,
   ErrorCode,
   ListToolsRequestSchema,
   McpError,
@@ -93,37 +94,30 @@ let _mcpServer: Server | null = null;
 const ElicitationResponseSchema = z.object({
   action: z.literal("accept"),
   content: z.object({
-    approved: z.literal(true),
+    approved: z.boolean(),
   }).optional(),
 });
 
 function isElicitationApproved(
   result: unknown,
 ): result is z.infer<typeof ElicitationResponseSchema> {
-  return ElicitationResponseSchema.safeParse(result).success;
+  const parsed = ElicitationResponseSchema.safeParse(result);
+  return parsed.success && parsed.data.content?.approved === true;
 }
 
 // ============================================================
 // Request handlers — all input validated with Zod .safeParse()
 // ============================================================
 
-/** Build readOnly permission display fields for an elicitation requestedSchema. */
-function permSchemaFields(
-  permissions: Record<string, string[] | undefined>,
-): Record<string, unknown> {
-  const props: Record<string, unknown> = {};
-  for (const key of ["read", "write", "net", "env"]) {
+function permsDesc(permissions: Record<string, string[] | undefined>): string {
+  const parts: string[] = [];
+  for (const key of ["read", "write", "net", "env"] as const) {
     const vals = permissions[key];
     if (vals && vals.length > 0) {
-      props[`perm_${key}`] = {
-        type: "string",
-        title: key,
-        readOnly: true,
-        default: vals.join(", "),
-      };
+      parts.push(`  ${key}: ${vals.join(", ")}`);
     }
   }
-  return props;
+  return parts.length > 0 ? parts.join("\n") : "(none)";
 }
 
 async function elicitScriptApproval(
@@ -134,19 +128,22 @@ async function elicitScriptApproval(
   if (!server) return false;
 
   const modeLabel = mode === "eval" ? "Eval" : "Module";
-
-  const permsProps = permSchemaFields(permissions);
+  const hasPerms = Object.values(permissions).some((v) => v && v.length > 0);
+  const msg = hasPerms
+    ? `Approve ${modeLabel} script execution?\n\nRequested permissions:\n${
+      permsDesc(permissions)
+    }`
+    : `Approve ${modeLabel} script execution?\n\nNo special permissions requested.`;
 
   const result = await server.request(
     {
       method: "elicitation/create",
       params: {
         mode: "form",
-        message: `Approve ${modeLabel} script execution?`,
+        message: msg,
         requestedSchema: {
           type: "object",
           properties: {
-            ...permsProps,
             approved: {
               type: "boolean",
               title: "Approve",
@@ -156,7 +153,7 @@ async function elicitScriptApproval(
         },
       },
     },
-    ElicitationResponseSchema,
+    ElicitResultSchema,
   );
   return isElicitationApproved(result);
 }
@@ -253,18 +250,16 @@ async function handleRunSkill(args: Record<string, unknown>) {
         method: "elicitation/create",
         params: {
           mode: "form",
-          message:
+          message: [
             `Skill content has changed since last approval. Continue with same permissions?`,
+            `Path: ${skill_path}`,
+            ...(permissions
+              ? [``, `Permissions override:`, permsDesc(permissions)]
+              : [``, `Permissions override: none`]),
+          ].join("\n"),
           requestedSchema: {
             type: "object",
             properties: {
-              skill_path: {
-                type: "string",
-                title: "Skill",
-                readOnly: true,
-                default: skill_path,
-              },
-              ...(permissions ? permSchemaFields(permissions) : {}),
               approved: {
                 type: "boolean",
                 title: "Continue",
@@ -274,7 +269,7 @@ async function handleRunSkill(args: Record<string, unknown>) {
           },
         },
       },
-      ElicitationResponseSchema,
+      ElicitResultSchema,
     );
 
     if (!isElicitationApproved(elicitResult)) {
@@ -312,17 +307,17 @@ async function handleRunSkill(args: Record<string, unknown>) {
         method: "elicitation/create",
         params: {
           mode: "form",
-          message: `Approve skill execution?`,
+          message: [
+            `Approve skill execution?`,
+            `Path: ${skill_path}`,
+            ``,
+            ...(permissions
+              ? [`Permissions override:`, permsDesc(permissions)]
+              : [`Permissions override: none`]),
+          ].join("\n"),
           requestedSchema: {
             type: "object",
             properties: {
-              skill_path: {
-                type: "string",
-                title: "Skill",
-                readOnly: true,
-                default: skill_path,
-              },
-              ...(permissions ? permSchemaFields(permissions) : {}),
               approved: {
                 type: "boolean",
                 title: "Approve",
@@ -332,7 +327,7 @@ async function handleRunSkill(args: Record<string, unknown>) {
           },
         },
       },
-      ElicitationResponseSchema,
+      ElicitResultSchema,
     );
 
     if (!isElicitationApproved(elicitResult)) {
@@ -369,35 +364,15 @@ async function handleRunSkill(args: Record<string, unknown>) {
         method: "elicitation/create",
         params: {
           mode: "form",
-          message:
-            `Skill is approved, but agent requests a permissions override. Continue?`,
+          message: [
+            `Skill is approved, but agent requests a permissions override:`,
+            permsDesc(permissions),
+            ``,
+            `Continue with restricted permissions?`,
+          ].join("\n"),
           requestedSchema: {
             type: "object",
             properties: {
-              override_read: {
-                type: "string",
-                title: "Read",
-                readOnly: true,
-                default: (permissions.read ?? []).join(", ") || "(none)",
-              },
-              override_write: {
-                type: "string",
-                title: "Write",
-                readOnly: true,
-                default: (permissions.write ?? []).join(", ") || "(none)",
-              },
-              override_net: {
-                type: "string",
-                title: "Net",
-                readOnly: true,
-                default: (permissions.net ?? []).join(", ") || "(none)",
-              },
-              override_env: {
-                type: "string",
-                title: "Env",
-                readOnly: true,
-                default: (permissions.env ?? []).join(", ") || "(none)",
-              },
               approved: {
                 type: "boolean",
                 title: "Allow",
@@ -407,7 +382,7 @@ async function handleRunSkill(args: Record<string, unknown>) {
           },
         },
       },
-      ElicitationResponseSchema,
+      ElicitResultSchema,
     );
     if (!isElicitationApproved(result)) {
       return {
