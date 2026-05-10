@@ -46,6 +46,10 @@ export function loadPermissionModule(skillDir: string): PermissionModule {
     }
   };
 
+  worker.onmessageerror = (e) => {
+    console.error("[aves] permission worker error:", e);
+  };
+
   return {
     decide(permission: string, value: string) {
       return new Promise((resolve) => {

@@ -30,6 +30,16 @@ const DEFAULT_IMPORT_DOMAINS = [
   "gist.githubusercontent.com:443",
 ];
 
+const BROKER_NET_ALLOW = [
+  "deno.land",
+  "jsr.io",
+  "esm.sh",
+  "raw.esm.sh",
+  "cdn.jsdelivr.net",
+  "raw.githubusercontent.com",
+  "gist.githubusercontent.com",
+];
+
 // ============================================================
 // spawnDenoWithBroker
 // ============================================================
@@ -108,9 +118,8 @@ function isDefaultAllowed(
     case "write":
       return resolveTempDirs().some((d) => req.value.startsWith(d + "/"));
     case "net": {
-      return DEFAULT_IMPORT_DOMAINS.some(
-        (d) => req.value === d || req.value.startsWith(d.split(":")[0]),
-      );
+      const reqHost = req.value.split(":")[0];
+      return BROKER_NET_ALLOW.some((d) => reqHost === d);
     }
     default:
       return false;
@@ -155,17 +164,11 @@ function createRunBrokerPolicy(
   extraDirs: string[],
   skillDir?: string,
 ): BrokerPolicy {
-  const cache = new Map<number, boolean>();
-
   // Load permission module at policy creation time (if skillDir provided)
   const permModule = skillDir ? loadPermissionModule(skillDir) : null;
 
   return {
     async decide(req) {
-      // Check cache (repeated request for same id during elicit round-trip)
-      const cached = cache.get(req.id);
-      if (cached !== undefined) return cached ? "allow" : { deny: "cached" };
-
       // Always allow safe defaults (no ceiling or trust needed)
       if (isDefaultAllowed(req)) return "allow";
       if (
@@ -180,7 +183,7 @@ function createRunBrokerPolicy(
           return { deny: "denied by skill permission module" };
         }
         if (permResult === "allow") return "allow";
-        // null → fall through to ceiling / hash trust / elicit
+        // null → fall through to ceiling / hash trust / deny
       }
 
       // Check Codex ceiling
@@ -190,7 +193,7 @@ function createRunBrokerPolicy(
           return { deny: "outside Codex sandbox" };
         }
         if (ceilingResult === "allow") {
-          // Unrestricted ceiling — no need to elicit
+          // Unrestricted ceiling — no need to check further
           if (codexCeiling) {
             const readable = extractCodexReadablePaths(codexCeiling);
             const writable = extractCodexWritablePaths(codexCeiling);
@@ -210,11 +213,11 @@ function createRunBrokerPolicy(
                 return "allow";
               }
             } catch {
-              // DB error — fall through to elicit
+              // DB error — deny instead of elicit
             }
           }
-          // First run within ceiling — elicit
-          return "elicit";
+          // First run within ceiling — deny (elicit handled by server)
+          return { deny: "requires approval" };
         }
       }
 
@@ -225,14 +228,14 @@ function createRunBrokerPolicy(
           return { deny: "denied by skill permission module" };
         }
         if (permResult === "allow") return "allow";
-        // null → fall through to elicit for non-read
+        // null → fall through to deny
       }
       if (req.permission === "read") return "allow";
       return { deny: "outside Codex sandbox" };
     },
 
-    onElicitResolved(id, allowed) {
-      cache.set(id, allowed);
+    onElicitResolved(_id, _allowed) {
+      // No-op: elicitation handled by server, not broker
     },
   };
 }
@@ -467,6 +470,7 @@ export async function executeSkillRun(
     policy?: ServerPolicy;
     permissionsOverride?: Permissions;
     projectPath?: string;
+    codexCeiling?: SandboxState | null;
   },
 ): Promise<SkillRunResult> {
   const runId = crypto.randomUUID();
@@ -505,7 +509,7 @@ export async function executeSkillRun(
     denied,
     "skill",
     undefined,
-    undefined,
+    options?.codexCeiling ?? null,
     skillDir,
   );
 

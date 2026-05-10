@@ -172,29 +172,47 @@ function permissionsMatch(
   return true;
 }
 
+let _elicitLock: Promise<void> = Promise.resolve();
+
+async function withElicitLock<T>(fn: () => Promise<T>): Promise<T> {
+  const prev = _elicitLock;
+  let resolve: () => void;
+  _elicitLock = new Promise((r) => {
+    resolve = r;
+  });
+  await prev;
+  try {
+    return await fn();
+  } finally {
+    resolve!();
+  }
+}
+
 /** Send an elicitation/create request and return the raw result. */
 async function elicitRequest(msg: string): Promise<unknown> {
   const server = _mcpServer;
   if (!server) return { action: "reject" };
-  return await server.request(
-    {
-      method: "elicitation/create",
-      params: {
-        mode: "form",
-        message: msg,
-        requestedSchema: {
-          type: "object",
-          properties: {
-            approved: {
-              type: "boolean",
-              title: "Approve",
-              description: "Approve execution with the listed permissions",
+  return await withElicitLock(() =>
+    server.request(
+      {
+        method: "elicitation/create",
+        params: {
+          mode: "form",
+          message: msg,
+          requestedSchema: {
+            type: "object",
+            properties: {
+              approved: {
+                type: "boolean",
+                title: "Approve",
+                description: "Approve execution with the listed permissions",
+              },
             },
           },
         },
       },
-    },
-    ElicitationResponseSchema,
+      ElicitationResponseSchema,
+    )
   );
 }
 

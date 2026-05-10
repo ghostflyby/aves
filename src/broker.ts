@@ -112,6 +112,24 @@ export async function startBroker(
       try {
         listener.close();
       } catch { /* already closed */ }
+      for (const [id, entry] of pending) {
+        try {
+          const encoder = new TextEncoder();
+          entry.writer.write(
+            encoder.encode(
+              JSON.stringify({
+                id,
+                result: "deny",
+                reason: "broker cancelled",
+              }) + "\n",
+            ),
+          );
+        } catch { /* best effort */ }
+        try {
+          entry.resolve(false);
+        } catch { /* best effort */ }
+      }
+      pending.clear();
       try {
         await Deno.remove(sockPath);
       } catch { /* already removed */ }

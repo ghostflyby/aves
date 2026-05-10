@@ -16,12 +16,13 @@ ctx.onmessage = async (e: MessageEvent) => {
       const imported = await import(modulePath);
       mod = imported.default ?? {};
       if (typeof mod !== "object" || mod === null) mod = {};
-    } catch {
+    } catch (err) {
       mod = {};
+      self.postMessage({ type: "error", error: String(err) });
     }
   }
 
-  const fn = mod[permission];
+  const fn = Object.hasOwn(mod, permission) ? mod[permission] : undefined;
   let result: boolean | undefined;
   if (typeof fn === "function") {
     try {
