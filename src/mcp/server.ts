@@ -28,13 +28,7 @@ import {
   handleReadResource,
 } from "./resources.ts";
 import { RUNS_TABLE_DDL } from "../db-schema.ts";
-import {
-  approveSkill,
-  checkSkillApproval,
-  listSkills,
-  loadSkillManifest,
-  promoteRunToSkill,
-} from "../skill.ts";
+import { listSkills, promoteRunToSkill } from "../skill.ts";
 import {
   ListRunsInputSchema,
   PromoteToSkillInputSchema,
@@ -412,243 +406,71 @@ async function handleRunSkill(args: Record<string, unknown>, meta: unknown) {
 
   const { skill_path, input, permissions } = parsed.data;
 
-  // Check skill approval status
-  const approvalStatus = await checkSkillApproval(skill_path);
-
-  if (approvalStatus.status === "not_found") {
+  // Verify SKILL.md exists
+  try {
+    await Deno.stat(`${skill_path}/SKILL.md`);
+  } catch {
     throw new McpError(
       ErrorCode.InvalidParams,
-      `Skill not found or invalid: ${approvalStatus.error}`,
+      `Not a skill directory (SKILL.md not found): ${skill_path}`,
     );
   }
 
-  // Content changed — notify and ask user to confirm
-  if (approvalStatus.status === "content_changed") {
-    const server = _mcpServer;
-    if (!server) {
-      throw new McpError(
-        ErrorCode.InternalError,
-        "MCP server not initialized",
-      );
-    }
-
-    const elicitResult = await server.request(
-      {
-        method: "elicitation/create",
-        params: {
-          mode: "form",
-          message: [
-            `Skill content has changed since last approval. Continue with same permissions?`,
-            `Path: ${skill_path}`,
-            ...(permissions
-              ? [``, `Permissions override:`, permsDesc(permissions)]
-              : [``, `Permissions override: none`]),
-          ].join("\n"),
-          requestedSchema: {
-            type: "object",
-            properties: {},
-          },
-        },
-      },
-      ElicitationResponseSchema,
+  // Read mod.ts and compute hash
+  let codeHash: string;
+  try {
+    const modContent = await Deno.readTextFile(`${skill_path}/mod.ts`);
+    codeHash = await sha256Hex(modContent);
+  } catch {
+    throw new McpError(
+      ErrorCode.InvalidParams,
+      `Skill entrypoint not found: ${skill_path}/mod.ts`,
     );
-
-    if (!isElicitationApproved(elicitResult)) {
-      return {
-        content: [{
-          type: "text",
-          text: JSON.stringify({
-            ok: false,
-            error: "Skill execution cancelled due to content change",
-          }),
-        }],
-      };
-    }
-
-    const approveResult = await approveSkill(skill_path);
-    if (!approveResult.ok) {
-      throw new McpError(ErrorCode.InternalError, approveResult.error);
-    }
   }
 
-  // Need approval — send Elicitation to the client
-  if (approvalStatus.status === "need_approval") {
-    const server = _mcpServer;
-    if (!server) {
-      throw new McpError(
-        ErrorCode.InternalError,
-        "MCP server not initialized",
-      );
-    }
-
-    // Use server.request() to send an elicitation/create request
-    // asking the client to present an approval prompt to the user
-    const elicitResult = await server.request(
-      {
-        method: "elicitation/create",
-        params: {
-          mode: "form",
-          message: [
-            `Approve skill execution?`,
-            `Path: ${skill_path}`,
-            ``,
-            ...(permissions
-              ? [`Permissions override:`, permsDesc(permissions)]
-              : [`Permissions override: none`]),
-          ].join("\n"),
-          requestedSchema: {
-            type: "object",
-            properties: {},
-          },
-        },
-      },
-      ElicitationResponseSchema,
-    );
-
-    if (!isElicitationApproved(elicitResult)) {
-      return {
-        content: [{
-          type: "text",
-          text: JSON.stringify({
-            ok: false,
-            error: "Skill execution rejected by user",
-          }),
-        }],
-      };
-    }
-
-    // Record approval
-    const approveResult = await approveSkill(skill_path);
-    if (!approveResult.ok) {
-      throw new McpError(ErrorCode.InternalError, approveResult.error);
-    }
-  }
-
-  // If skill has override permissions, ask for confirmation
-  if (
-    permissions &&
-    (permissions.read?.length ?? 0) + (permissions.write?.length ?? 0) +
-          (permissions.net?.length ?? 0) + (permissions.env?.length ?? 0) > 0
-  ) {
-    const server = _mcpServer;
-    if (!server) {
-      throw new McpError(ErrorCode.InternalError, "MCP server not initialized");
-    }
-    const result = await server.request(
-      {
-        method: "elicitation/create",
-        params: {
-          mode: "form",
-          message: [
-            `Skill is approved, but agent requests a permissions override:`,
-            permsDesc(permissions),
-            ``,
-            `Continue with restricted permissions?`,
-          ].join("\n"),
-          requestedSchema: {
-            type: "object",
-            properties: {},
-          },
-        },
-      },
-      ElicitationResponseSchema,
-    );
-    if (!isElicitationApproved(result)) {
-      return {
-        content: [{
-          type: "text",
-          text: JSON.stringify({
-            ok: false,
-            error: "Permissions override rejected by user",
-          }),
-        }],
-      };
-    }
-  }
-
-  // Approved — apply Codex ceiling and execute
+  // Extract Codex sandbox state
   const sandboxState = extractSandboxState(meta);
 
-  // Compute effective permissions (manifest ∩ override, same as executeSkillRun does)
-  const effectivePerms: Record<string, string[] | undefined> = {};
-  const manifestResult = await loadSkillManifest(skill_path);
-  if (manifestResult.ok) {
-    const manifest = manifestResult.manifest;
-    const override = permissions ?? {};
-    for (const key of ["read", "write", "net", "env"] as const) {
-      const base = manifest.permissions[key] ?? [];
-      const over = override[key] ?? [];
-      if (over.length > 0) {
-        const shrunk = base.filter((p) => over.includes(p));
-        if (shrunk.length > 0) effectivePerms[key] = shrunk;
-      } else if (base.length > 0) {
-        effectivePerms[key] = base;
-      }
-    }
+  // Use override permissions or empty (skill permissions come from override only)
+  const requestedPerms = permissions ?? {};
+
+  // Apply Codex ceiling
+  const { granted, dropped } = applyCodexCeiling(
+    requestedPerms,
+    sandboxState,
+  );
+
+  // Approval via hash-based trust (same pattern as handleRunScript)
+  const trusted = await elicitScriptApproval(
+    "skill",
+    granted,
+    dropped,
+    codeHash,
+  );
+  if (!trusted) {
+    return {
+      content: [{
+        type: "text",
+        text: JSON.stringify({
+          ok: false,
+          error: "Skill execution rejected by user",
+        }),
+      }],
+    };
   }
 
-  // Apply ceiling on top of effective permissions
-  const { granted: ceilingGranted, dropped: ceilingDropped } =
-    applyCodexCeiling(
-      effectivePerms,
-      sandboxState,
-    );
+  // Save approval for future silent runs
+  try {
+    await saveScriptApproval({
+      codeHash,
+      approvedAt: new Date().toISOString(),
+      permissions: granted,
+    });
+  } catch { /* best-effort */ }
 
-  // If ceiling dropped permissions, elicit
-  if (!isWithinCodexCeiling(ceilingDropped)) {
-    const parts: string[] = [];
-    if (ceilingDropped.read?.length) {
-      parts.push(
-        `Read paths outside Codex sandbox:\n${
-          permsDesc({ read: ceilingDropped.read })
-        }`,
-      );
-    }
-    if (ceilingDropped.net?.length) {
-      parts.push(
-        `Network targets outside Codex sandbox:\n${
-          permsDesc({ net: ceilingDropped.net })
-        }`,
-      );
-    }
-    if (ceilingDropped.write?.length) {
-      parts.push(
-        `Write paths DENIED (write cannot exceed Codex sandbox):\n${
-          permsDesc({ write: ceilingDropped.write })
-        }`,
-      );
-    }
-
-    if (parts.length > 0) {
-      const msg = `Skill "${skill_path}" permissions exceed Codex sandbox:\n\n${
-        parts.join("\n\n")
-      }\n\nApprove with restricted permissions?`;
-      const elicitResult = await elicitRequest(msg);
-      if (!isElicitationApproved(elicitResult)) {
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              ok: false,
-              error: "Skill execution rejected: Codex ceiling not accepted",
-            }),
-          }],
-        };
-      }
-    }
-  }
-
-  // Merge ceilingGranted as shrink override for executeSkillRun
-  const ceilingOverride: Record<string, string[]> = {};
-  for (const key of ["read", "write", "net", "env"] as const) {
-    const vals = ceilingGranted[key];
-    if (vals && vals.length > 0) ceilingOverride[key] = vals;
-  }
-
+  // Execute with ceiling-granted permissions
   const result = await executeSkillRun(skill_path, input ?? {}, {
-    permissionsOverride: Object.keys(ceilingOverride).length > 0
-      ? ceilingOverride
-      : permissions,
+    permissionsOverride: Object.keys(granted).length > 0 ? granted : undefined,
   });
 
   if (!result.record) {
@@ -687,7 +509,10 @@ async function handleSuggestSkills(args: Record<string, unknown>) {
         ? Object.keys(c.runs[c.runs.length - 1]!.raw_input!).slice(0, 4).join(
           "_",
         ).toLowerCase()
-          .replace(/[^a-z0-9_]/g, "_").replace(/_+/, "_").replace(/^_|_$/g, "")
+          .replace(/[^a-z0-9_]/g, "_").replace(/_+/, "_").replace(
+            /^_|_$/g,
+            "",
+          )
         : undefined;
 
       suggestions.push({
@@ -713,7 +538,10 @@ async function handleSuggestSkills(args: Record<string, unknown>) {
         ? Object.keys(c.runs[c.runs.length - 1]!.raw_input!).slice(0, 4).join(
           "_",
         ).toLowerCase()
-          .replace(/[^a-z0-9_]/g, "_").replace(/_+/, "_").replace(/^_|_$/g, "")
+          .replace(/[^a-z0-9_]/g, "_").replace(/_+/, "_").replace(
+            /^_|_$/g,
+            "",
+          )
         : undefined;
 
       suggestions.push({
@@ -760,7 +588,7 @@ async function handlePromoteToSkill(args: Record<string, unknown>) {
   const lines = [
     `Skill \`${name}\` created.`,
     `Path: ${result.skillDir}`,
-    `Files: skill.json, SKILL.md, mod.ts`,
+    `Files: SKILL.md, mod.ts`,
     ``,
   ];
 
@@ -774,9 +602,8 @@ async function handlePromoteToSkill(args: Record<string, unknown>) {
 
   lines.push("Next steps:");
   lines.push("- Review and edit SKILL.md");
-  lines.push("- Review permissions in skill.json");
   lines.push("- Edit mod.ts if the entrypoint needs changes");
-  lines.push("- Add permission_justifications to skill.json for transparency");
+  lines.push("- Add examples.json for sample input/output testing");
 
   return { content: [{ type: "text", text: lines.join("\n") }] };
 }
@@ -827,7 +654,6 @@ async function handleListSkills() {
 
 // ============================================================
 // Server startup
-// ============================================================
 // ============================================================
 /**
  * Start an HTTP MCP server (long-running daemon).
@@ -973,7 +799,7 @@ export async function startServer() {
         case "replay_run":
           return await handleReplayRun(args ?? {});
         case "list_runs":
-          return await handleListRuns(args ?? {});
+          return await handleListRuns();
         case "run_skill": {
           const meta = (request.params as Record<string, unknown>)?._meta;
           return await handleRunSkill(args ?? {}, meta);

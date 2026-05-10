@@ -1,3 +1,4 @@
+import { parse as parseYaml } from "@std/yaml";
 import { resolvePermissions } from "./policy.ts";
 import {
   ensureSkillRoots,
@@ -5,72 +6,7 @@ import {
   getWritableSkillRoot,
 } from "./config.ts";
 import { saveRun } from "./run-store.ts";
-import type { RunRecord, SkillManifest } from "./schemas.ts";
-import { SkillManifestSchema } from "./schemas.ts";
-
-// ============================================================
-// Skill manifest loading
-// ============================================================
-
-export type LoadManifestResult =
-  | { ok: true; manifest: SkillManifest }
-  | { ok: false; error: string };
-
-function validateManifest(raw: unknown): LoadManifestResult {
-  const parsed = SkillManifestSchema.safeParse(raw);
-  if (!parsed.success) {
-    return {
-      ok: false,
-      error: parsed.error.issues
-        .map((i) => `${i.path.join(".")}: ${i.message}`)
-        .join("; "),
-    };
-  }
-  return { ok: true, manifest: parsed.data };
-}
-
-/**
- * Load and validate a skill manifest from a directory.
- */
-export async function loadSkillManifest(
-  skillDir: string,
-): Promise<LoadManifestResult> {
-  try {
-    const raw = JSON.parse(
-      await Deno.readTextFile(`${skillDir}/skill.json`),
-    );
-    return validateManifest(raw);
-  } catch (err) {
-    return {
-      ok: false,
-      error: err instanceof Error ? err.message : String(err),
-    };
-  }
-}
-
-/**
- * Hash a manifest for content-change detection.
- */
-export async function hashManifest(manifest: SkillManifest): Promise<string> {
-  const json = JSON.stringify(manifest);
-  const enc = new TextEncoder();
-  const data = enc.encode(json);
-  const hash = await crypto.subtle.digest("SHA-256", data);
-  return Array.from(new Uint8Array(hash))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-// ============================================================
-// Entrypoint resolution
-// ============================================================
-
-export function resolveSkillEntrypoint(
-  skillDir: string,
-  manifest: SkillManifest,
-): string {
-  return `${skillDir}/${manifest.entrypoint.replace(/^\.\//, "")}`;
-}
+import type { RunRecord } from "./schemas.ts";
 
 // ============================================================
 // SKILL.md generation
@@ -103,7 +39,7 @@ function extractZodInputSchema(code: string): string | null {
 function generateSkillMarkdown(
   name: string,
   description: string,
-  manifest?: SkillManifest,
+  _manifest: undefined,
   code?: string,
 ): string {
   const lines: string[] = [];
@@ -125,7 +61,7 @@ function generateSkillMarkdown(
   lines.push("");
   lines.push("- `skill_path`: absolute path to this directory");
   lines.push(
-    "- `input`: JSON matching the schema in `skill.json` \u2192 `input_schema`",
+    "- `input`: JSON matching the schema in `SKILL.md` \u2192 Input Schema",
   );
   lines.push("");
   lines.push(
@@ -172,17 +108,6 @@ function generateSkillMarkdown(
   );
   lines.push("");
 
-  if (manifest?.permission_justifications) {
-    lines.push("## Permission Justifications");
-    lines.push("");
-    for (
-      const [path, reason] of Object.entries(manifest.permission_justifications)
-    ) {
-      lines.push(`- **${path}**: ${reason}`);
-    }
-    lines.push("");
-  }
-
   return lines.join("\n");
 }
 
@@ -193,38 +118,53 @@ function generateSkillMarkdown(
 export interface SkillInfo {
   name: string;
   path: string;
-  manifest: SkillManifest;
-  manifestHash?: string;
+  description: string;
 }
 
 /**
- * Scan all skill roots for valid skills.
+ * Scan all skill roots for skills with SKILL.md (frontmatter `aves: true`).
  */
 export async function listSkills(): Promise<SkillInfo[]> {
   const roots = await getSkillRoots();
   const skills: SkillInfo[] = [];
-
   for (const root of roots) {
     try {
       for await (const entry of Deno.readDir(root)) {
         if (!entry.isDirectory) continue;
         const skillDir = `${root}/${entry.name}`;
-        const result = await loadSkillManifest(skillDir);
-        if (result.ok) {
-          skills.push({
-            name: entry.name,
-            path: skillDir,
-            manifest: result.manifest,
-            manifestHash: await hashManifest(result.manifest),
-          });
+        try {
+          const mdPath = `${skillDir}/SKILL.md`;
+          const stat = await Deno.stat(mdPath);
+          if (!stat.isFile) continue;
+          const content = await Deno.readTextFile(mdPath);
+          const frontmatter = extractFrontmatter(content);
+          if (frontmatter?.aves === true) {
+            skills.push({
+              name: entry.name,
+              path: skillDir,
+              description: String(frontmatter.description ?? ""),
+            });
+          }
+        } catch {
+          continue;
         }
       }
     } catch {
       continue;
     }
   }
-
   return skills;
+}
+
+/** Extract YAML frontmatter between --- markers. */
+function extractFrontmatter(md: string): Record<string, unknown> | null {
+  const match = md.match(/^---\n([\s\S]*?)\n---/);
+  if (!match) return null;
+  try {
+    return parseYaml(match[1]) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
 }
 
 // ============================================================
@@ -269,21 +209,10 @@ export async function promoteRunToSkill(
     return {
       ok: false,
       error: `Cannot promote: permissions were denied for: ${
-        denied.join(
-          ", ",
-        )
+        denied.join(", ")
       }`,
     };
   }
-
-  const manifest = {
-    permissions: run.granted_permissions,
-    input_schema: run.parsed_input ? run.input_schema_json : undefined,
-    entrypoint: "./mod.ts",
-  };
-
-  const validation = validateManifest(manifest);
-  if (!validation.ok) return validation;
 
   await ensureSkillRoots();
   const skillRoot = await getWritableSkillRoot();
@@ -291,7 +220,7 @@ export async function promoteRunToSkill(
 
   if (options?.skipIfExists) {
     try {
-      await Deno.stat(`${skillDir}/skill.json`);
+      await Deno.stat(`${skillDir}/SKILL.md`);
       return { ok: true, skillDir, warnings };
     } catch {
       // Doesn't exist, continue
@@ -300,16 +229,13 @@ export async function promoteRunToSkill(
 
   await Deno.mkdir(skillDir, { recursive: true });
 
-  await Deno.writeTextFile(
-    `${skillDir}/skill.json`,
-    JSON.stringify(manifest, null, 2),
-  );
-
+  // Write SKILL.md
   await Deno.writeTextFile(
     `${skillDir}/SKILL.md`,
-    generateSkillMarkdown(name, description, manifest, run.code),
+    generateSkillMarkdown(name, description, undefined, run.code),
   );
 
+  // Write mod.ts
   const entrypointContent = options?.entrypointContent ??
     run.code ??
     `
@@ -332,96 +258,4 @@ export default async function main(input: unknown) {
   await saveRun(run);
 
   return { ok: true, skillDir, warnings };
-}
-
-// ============================================================
-// Approval checking
-// ============================================================
-
-export type SkillApprovalStatus =
-  | { status: "approved" }
-  | {
-    status: "content_changed";
-    skillPath: string;
-    manifestHash: string;
-    contentHash: string;
-  }
-  | { status: "need_approval"; skillPath: string; manifestHash: string }
-  | { status: "not_found"; error: string };
-
-/**
- * Check whether a skill has been approved for execution.
- */
-export async function checkSkillApproval(
-  skillDir: string,
-): Promise<SkillApprovalStatus> {
-  const manifestResult = await loadSkillManifest(skillDir);
-  if (!manifestResult.ok) {
-    return { status: "not_found", error: manifestResult.error };
-  }
-
-  const manifest = manifestResult.manifest;
-  const mHash = await hashManifest(manifest);
-
-  // Check if previously approved
-  try {
-    const approvedHash = await Deno.readTextFile(
-      `${skillDir}/.aves-approved`,
-    );
-    const trimmed = approvedHash.trim();
-    if (trimmed === mHash) {
-      return { status: "approved" };
-    }
-    return {
-      status: "content_changed",
-      skillPath: skillDir,
-      manifestHash: mHash,
-      contentHash: trimmed,
-    };
-  } catch {
-    return {
-      status: "need_approval",
-      skillPath: skillDir,
-      manifestHash: mHash,
-    };
-  }
-}
-
-/**
- * Mark a skill as approved by writing its manifest hash.
- */
-export async function approveSkill(
-  skillDir: string,
-): Promise<{ ok: true } | { ok: false; error: string }> {
-  const manifestResult = await loadSkillManifest(skillDir);
-  if (!manifestResult.ok) {
-    return { ok: false, error: manifestResult.error };
-  }
-
-  const mHash = await hashManifest(manifestResult.manifest);
-  await Deno.writeTextFile(`${skillDir}/.aves-approved`, mHash);
-  return { ok: true };
-}
-
-// ============================================================
-// Replay test generation (public utility, not called from promote)
-// ============================================================
-
-function _generateReplayTest(skillName: string, examples: unknown[]): string {
-  const lines = [
-    `import { assertEquals } from "@std/assert";`,
-    `import main from "./mod.ts";`,
-    ``,
-  ];
-  for (let i = 0; i < examples.length; i++) {
-    const ex = examples[i] as { input?: unknown; output?: unknown };
-    lines.push(
-      `Deno.test("${skillName} replay ${i}", async () => {`,
-      `  const result = await main(${JSON.stringify(ex.input ?? {})});`,
-      `  assertEquals(result, ${JSON.stringify(ex.output)});`,
-      `});`,
-      ``,
-    );
-  }
-  return lines.join("\n");
 }

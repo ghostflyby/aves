@@ -5,6 +5,7 @@
     "jsr:@std/collections@^1.1.3": "1.1.7",
     "jsr:@std/internal@^1.0.12": "1.0.13",
     "jsr:@std/toml@1": "1.0.11",
+    "jsr:@std/yaml@1": "1.1.0",
     "npm:@modelcontextprotocol/sdk@^1.11.0": "1.29.0_zod@4.4.3",
     "npm:zod@4": "4.4.3"
   },
@@ -26,6 +27,9 @@
       "dependencies": [
         "jsr:@std/collections"
       ]
+    },
+    "@std/yaml@1.1.0": {
+      "integrity": "fc1c5c63e05c4c5eb6118355f557958035d41940d6c29d35b306ef7155d6edb0"
     }
   },
   "npm": {
@@ -545,6 +549,7 @@
     "dependencies": [
       "jsr:@std/assert@1",
       "jsr:@std/toml@1",
+      "jsr:@std/yaml@1",
       "npm:@modelcontextprotocol/sdk@^1.11.0",
       "npm:zod@4"
     ]

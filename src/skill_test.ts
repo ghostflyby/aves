@@ -1,11 +1,5 @@
 import { assertEquals, assertExists, assertStringIncludes } from "@std/assert";
-import {
-  approveSkill,
-  checkSkillApproval,
-  listSkills,
-  loadSkillManifest,
-  promoteRunToSkill,
-} from "./skill.ts";
+import { listSkills, promoteRunToSkill } from "./skill.ts";
 import type { RunRecord } from "./schemas.ts";
 
 // ============================================================
@@ -58,7 +52,7 @@ export default async function main(input: z.infer<typeof inputSchema>) {
 // Tests
 // ============================================================
 
-Deno.test("promoteRunToSkill - creates skill files on disk", async () => {
+Deno.test("promoteRunToSkill - creates skill files on disk (no skill.json)", async () => {
   const prevData = Deno.env.get("AVES_DATA_DIR");
   Deno.env.set("AVES_DATA_DIR", "/tmp/aves-test-promote");
   const result = await promoteRunToSkill(
@@ -70,8 +64,12 @@ Deno.test("promoteRunToSkill - creates skill files on disk", async () => {
   if (result.ok) {
     assertExists(result.skillDir);
 
-    const statManifest = await Deno.stat(`${result.skillDir}/skill.json`);
-    assertEquals(statManifest.isFile, true);
+    // skill.json should NOT exist
+    try {
+      await Deno.stat(`${result.skillDir}/skill.json`);
+      console.assert(false, "skill.json should NOT be created");
+    } catch { /* expected — skill.json is deprecated */ }
+
     const statMod = await Deno.stat(`${result.skillDir}/mod.ts`);
     assertEquals(statMod.isFile, true);
     const statSkMd = await Deno.stat(`${result.skillDir}/SKILL.md`);
@@ -95,9 +93,6 @@ Deno.test("promoteRunToSkill - creates skill files on disk", async () => {
     assertStringIncludes(skMdContent, "Add `./examples.json`");
     assertStringIncludes(skMdContent, "export const inputSchema");
     assertStringIncludes(skMdContent, "Text to hash");
-
-    const manifestResult = await loadSkillManifest(result.skillDir);
-    assertEquals(manifestResult.ok, true);
 
     const hasExampleWarning = result.warnings.some((w) =>
       w.includes("examples/test")
@@ -162,40 +157,33 @@ Deno.test("listSkills - returns empty for clean state", async () => {
   }
 });
 
-Deno.test("skill approval - save and load", async () => {
+Deno.test("listSkills - discovers SKILL.md-based skills", async () => {
   const prevData = Deno.env.get("AVES_DATA_DIR");
-  Deno.env.set("AVES_DATA_DIR", "/tmp/aves-test-skill-approval");
-  const skillPath = "/tmp/test-skill";
+  Deno.env.set("AVES_DATA_DIR", "/tmp/aves-test-skill-md");
+  const skillPath = "/tmp/aves-test-skill-md/skills/test-skill-md";
 
   try {
     await Deno.mkdir(skillPath, { recursive: true });
     await Deno.writeTextFile(
-      `${skillPath}/skill.json`,
-      JSON.stringify({
-        permissions: { read: ["/tmp"] },
-        entrypoint: "./mod.ts",
-      }),
+      `${skillPath}/SKILL.md`,
+      "---\nname: test-skill-md\ndescription: A skill discovered via SKILL.md\naves: true\n---\n\n# Test Skill",
     );
-    await Deno.writeTextFile(skillPath + "/SKILL.md", "# test");
+    await Deno.writeTextFile(
+      `${skillPath}/mod.ts`,
+      "export default async function main() { return { ok: true }; }",
+    );
 
-    const check = await checkSkillApproval(skillPath);
-    assertEquals(check.status, "need_approval");
-
-    const approved = await approveSkill(skillPath);
-    assertEquals(approved.ok, true);
-
-    const recheck = await checkSkillApproval(skillPath);
-    assertEquals(recheck.status, "approved");
+    const skills = await listSkills();
+    assertEquals(skills.length >= 1, true);
+    const found = skills.find((s) => s.name === "test-skill-md");
+    if (found) {
+      assertEquals(found.description, "A skill discovered via SKILL.md");
+    }
   } finally {
     if (prevData) Deno.env.set("AVES_DATA_DIR", prevData);
     else Deno.env.delete("AVES_DATA_DIR");
     try {
-      await Deno.remove(skillPath, { recursive: true });
-    } catch {
-      /* skip */
-    }
-    try {
-      await Deno.remove("/tmp/aves-test-skill-approval", { recursive: true });
+      await Deno.remove("/tmp/aves-test-skill-md", { recursive: true });
     } catch {
       /* skip */
     }

@@ -28,31 +28,48 @@ const EXAMPLE_URIS = [
   "aves://examples/stats",
 ];
 
-export const handleListResources = () => ({
-  resources: [
-    {
-      uri: "aves://schema/runs",
-      name: "Runs table schema",
-      description:
-        "Column definitions for the runs table with type annotations",
-      mimeType: "text/plain",
-    },
-    ...EXAMPLE_URIS.map((uri) => ({
-      uri,
-      name: uri.replace("aves://examples/", ""),
-      description: `Example script: ${uri.replace("aves://examples/", "")}`,
-      mimeType: "text/markdown",
-    })),
-  ],
-});
+export const handleListResources = async () => {
+  const skills = await listSkills();
+  return {
+    resources: [
+      {
+        uri: "aves://schema/runs",
+        name: "Runs table schema",
+        description:
+          "Column definitions for the runs table with type annotations",
+        mimeType: "text/plain",
+      },
+      {
+        uri: "aves://skills",
+        name: "Skills",
+        description:
+          "List of all installed skills with names, paths, and descriptions",
+        mimeType: "application/json",
+      },
+      ...EXAMPLE_URIS.map((uri) => ({
+        uri,
+        name: uri.replace("aves://examples/", ""),
+        description: `Example script: ${uri.replace("aves://examples/", "")}`,
+        mimeType: "text/markdown",
+      })),
+      ...skills.map((s) => ({
+        uri: `aves://skills/${s.name}`,
+        name: s.name,
+        description: s.description,
+        mimeType: "application/json",
+      })),
+    ],
+  };
+};
 
 export const handleListResourceTemplates = () => ({
   resourceTemplates: [
     {
       uriTemplate: "aves://skills/{name}",
       name: "Skill by name",
-      description: "Retrieve a single skill's manifest by its directory name",
-      mimeType: "application/json",
+      description:
+        "Retrieve a single skill's SKILL.md and metadata by its directory name",
+      mimeType: "text/markdown",
     },
     {
       uriTemplate: "aves://runs/{run_id}",
@@ -76,6 +93,17 @@ export async function handleReadResource(uri: string): Promise<{
     };
   }
 
+  if (uri === "aves://skills") {
+    const skills = await listSkills();
+    return {
+      contents: [{
+        uri,
+        mimeType: "application/json",
+        text: JSON.stringify(skills, null, 2),
+      }],
+    };
+  }
+
   const exampleContent = EXAMPLE_RESOURCES[uri];
   if (exampleContent) {
     return {
@@ -85,21 +113,31 @@ export async function handleReadResource(uri: string): Promise<{
 
   const skillMatch = uri.match(/^aves:\/\/skills\/(.+)$/);
   if (skillMatch) {
+    const skillName = skillMatch[1];
     const skills = await listSkills();
-    const skill = skills.find((s) => s.name === skillMatch[1]);
+    const skill = skills.find((s) => s.name === skillName);
     if (!skill) {
       throw new McpError(
         ErrorCode.InvalidParams,
-        `Skill not found: ${skillMatch[1]}`,
+        `Skill not found: ${skillName}`,
       );
     }
-    return {
-      contents: [{
-        uri,
-        mimeType: "application/json",
-        text: JSON.stringify(skill, null, 2),
-      }],
-    };
+    // Read and return SKILL.md content
+    try {
+      const mdContent = await Deno.readTextFile(`${skill.path}/SKILL.md`);
+      return {
+        contents: [{
+          uri,
+          mimeType: "text/markdown",
+          text: mdContent,
+        }],
+      };
+    } catch {
+      throw new McpError(
+        ErrorCode.InternalError,
+        `Could not read SKILL.md for skill: ${skillName}`,
+      );
+    }
   }
 
   const runMatch = uri.match(/^aves:\/\/runs\/(.+)$/);

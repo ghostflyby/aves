@@ -1,56 +1,207 @@
 import type { ServerPolicy } from "./policy.ts";
 import { resolvePermissions } from "./policy.ts";
-import { getAvesConfigDir, getAvesDataDir, getAvesStateDir } from "./paths.ts";
 import type { Permissions, RunRecord, RunRequest } from "./types.ts";
+import type { BrokerPolicy } from "./broker.ts";
+import { startBroker } from "./broker.ts";
+import type { SandboxState } from "./sandbox-state.ts";
 import {
-  hashManifest,
-  loadSkillManifest,
-  resolveSkillEntrypoint,
-} from "./skill.ts";
+  extractCodexNetworkTargets,
+  extractCodexReadablePaths,
+  extractCodexWritablePaths,
+} from "./sandbox-state.ts";
+import { loadScriptApproval } from "./run-store.ts";
 
 const BOOT_PATH = new URL("./boot.ts", import.meta.url).pathname;
 
-function buildPermissionFlags(permissions: Permissions): string[] {
-  const flags: string[] = [];
-  if (permissions.read && permissions.read.length > 0) {
-    flags.push(`--allow-read=${permissions.read.join(",")}`);
-  }
-  if (permissions.write && permissions.write.length > 0) {
-    flags.push(`--allow-write=${permissions.write.join(",")}`);
-  }
-  if (permissions.net && permissions.net.length > 0) {
-    flags.push(`--allow-net=${permissions.net.join(",")}`);
-  }
-  if (permissions.env && permissions.env.length > 0) {
-    flags.push(`--allow-env=${permissions.env.join(",")}`);
-  }
-  return flags;
-}
+// ============================================================
+// Default-allowed import domains (cannot go through broker —
+// imports are resolved at parse/load time before the broker
+// socket is connected).
+// ============================================================
 
-function buildDenyFlags(avesPaths: string[]): string[] {
-  if (avesPaths.length === 0) return [];
-  return [
-    `--deny-write=${avesPaths.join(",")}`,
-    `--deny-read=${avesPaths.join(",")}`,
+const DEFAULT_IMPORT_DOMAINS = [
+  "deno.land:443",
+  "jsr.io:443",
+  "esm.sh:443",
+  "raw.esm.sh:443",
+  "cdn.jsdelivr.net:443",
+  "raw.githubusercontent.com:443",
+  "gist.githubusercontent.com:443",
+];
+
+// ============================================================
+// spawnDenoWithBroker
+// ============================================================
+
+function spawnDenoWithBroker(
+  modulePath: string,
+  runDir: string,
+  sockPath: string,
+): Deno.ChildProcess {
+  const args = [
+    "run",
+    "--no-prompt",
+    "--allow-import=" + DEFAULT_IMPORT_DOMAINS.join(","),
+    BOOT_PATH,
+    modulePath,
   ];
+  const cmd = new Deno.Command("deno", {
+    args,
+    cwd: runDir,
+    stdout: "piped",
+    stderr: "piped",
+    env: {
+      ...Deno.env.toObject(),
+      DENO_PERMISSION_BROKER_PATH: sockPath,
+    },
+  });
+  return cmd.spawn();
 }
 
-function mergePermissions(base: Permissions, extra: Permissions): Permissions {
-  const result: Permissions = {};
-  const allKeys = new Set([
-    ...Object.keys(base),
-    ...Object.keys(extra),
-  ]) as Set<"read" | "write" | "net" | "env">;
-  for (const key of allKeys) {
-    const basePaths = base[key] ?? [];
-    const extraPaths = extra[key] ?? [];
-    const merged = [...new Set([...basePaths, ...extraPaths])];
-    if (merged.length > 0) result[key] = merged;
+// ============================================================
+// Default-allowed permissions (always allow, no ceiling/trust)
+// ============================================================
+
+const DEFAULT_ALLOWED_SYS = new Set([
+  "hostname",
+  "osRelease",
+  "osUptime",
+  "loadavg",
+  "systemMemoryInfo",
+  "gid",
+  "uid",
+  "networkInterfaces",
+]);
+
+const DEFAULT_ALLOWED_ENV = new Set([
+  "HOME",
+  "USER",
+  "PATH",
+  "TMPDIR",
+  "TEMP",
+  "TMP",
+  "SHELL",
+  "LANG",
+  "LC_ALL",
+  "TERM",
+]);
+
+function resolveTempDirs(): string[] {
+  const dirs: string[] = ["/tmp"];
+  const tmpdir = Deno.env.get("TMPDIR");
+  if (tmpdir && tmpdir !== "/tmp") {
+    dirs.push(tmpdir.replace(/\/+\$/, ""));
   }
-  return result;
+  return dirs;
 }
 
-// Shared execution body used by both executeRun and executeSkillRun
+async function isDefaultAllowed(
+  req: { permission: string; value: string },
+): Promise<boolean> {
+  switch (req.permission) {
+    case "sys":
+      return DEFAULT_ALLOWED_SYS.has(req.value);
+    case "env":
+      return DEFAULT_ALLOWED_ENV.has(req.value);
+    case "read":
+    case "write":
+      return (await resolveTempDirs()).some((d) =>
+        req.value.startsWith(d + "/")
+      );
+    case "net": {
+      return DEFAULT_IMPORT_DOMAINS.some(
+        (d) => req.value === d || req.value.startsWith(d.split(":")[0]),
+      );
+    }
+    default:
+      return false;
+  }
+}
+
+// ============================================================
+// Ceiling check
+// ============================================================
+
+function checkCeiling(
+  req: { permission: string; value: string },
+  ceiling: SandboxState,
+): "allow" | "deny" | "unknown" {
+  switch (req.permission) {
+    case "read": {
+      const readable = extractCodexReadablePaths(ceiling);
+      if (readable.includes("*")) return "allow";
+      return readable.some((p) => req.value.startsWith(p)) ? "allow" : "deny";
+    }
+    case "write": {
+      const writable = extractCodexWritablePaths(ceiling);
+      if (writable.includes("*")) return "allow";
+      return writable.some((p) => req.value.startsWith(p)) ? "allow" : "deny";
+    }
+    case "net": {
+      const netTargets = extractCodexNetworkTargets(ceiling);
+      return netTargets.includes("*") ? "allow" : "deny";
+    }
+    default:
+      return "deny";
+  }
+}
+
+// ============================================================
+// createRunBrokerPolicy
+// ============================================================
+
+function createRunBrokerPolicy(
+  codexCeiling: SandboxState | null,
+  codeHash: string | null,
+): BrokerPolicy {
+  const cache = new Map<number, boolean>();
+
+  return {
+    async decide(req) {
+      // Check cache (repeated request for same id during elicit round-trip)
+      const cached = cache.get(req.id);
+      if (cached !== undefined) return cached ? "allow" : { deny: "cached" };
+
+      // Always allow safe defaults (no ceiling or trust needed)
+      if (await isDefaultAllowed(req)) return "allow";
+
+      // Check Codex ceiling
+      if (codexCeiling) {
+        const ceilingResult = checkCeiling(req, codexCeiling);
+        if (ceilingResult === "deny") {
+          return { deny: "outside Codex sandbox" };
+        }
+        if (ceilingResult === "allow") {
+          // Within ceiling — check hash trust for auto-approval
+          if (codeHash) {
+            try {
+              const prev = await loadScriptApproval(codeHash);
+              if (prev) {
+                return "allow";
+              }
+            } catch {
+              // DB error — fall through to elicit
+            }
+          }
+          // First run within ceiling — elicit
+          return "elicit";
+        }
+      }
+
+      // No ceiling info — elicit everything else
+      return { deny: "outside Codex sandbox (no ceiling available)" };
+    },
+
+    onElicitResolved(id, allowed) {
+      cache.set(id, allowed);
+    },
+  };
+}
+
+// ============================================================
+// runModuleInSandbox — core execution with broker
+// ============================================================
+
 async function runModuleInSandbox(
   runId: string,
   modulePath: string,
@@ -59,7 +210,8 @@ async function runModuleInSandbox(
   userPerms: Permissions,
   denied: string[],
   mode: RunRecord["mode"],
-  extraDenyPaths?: string[],
+  codeHash?: string | null,
+  codexCeiling?: SandboxState | null,
 ): Promise<RunRecord> {
   const runDir = await Deno.makeTempDir({
     prefix: "aves_",
@@ -73,59 +225,54 @@ async function runModuleInSandbox(
     JSON.stringify(input),
   );
 
-  const realRunDir = await Deno.realPath(runDir);
   const realModulePath = await Deno.realPath(modulePath);
+  const realRunDir = await Deno.realPath(runDir);
 
-  const runDirPerms: Permissions = {
-    read: [realRunDir, BOOT_PATH, realModulePath],
-    write: [realRunDir],
-  };
+  // Start the permission broker
+  const policy = createRunBrokerPolicy(codexCeiling ?? null, codeHash ?? null);
+  let brokerPath = "";
 
-  const mergedPerms = mergePermissions(granted, runDirPerms);
-  const safePerms: Permissions = {};
-  for (const [key, paths] of Object.entries(mergedPerms)) {
-    if (key !== "run" && key !== "ffi" && paths) {
-      safePerms[key as keyof Permissions] = paths;
-    }
+  try {
+    const broker = await startBroker(policy);
+    brokerPath = broker.sockPath;
+
+    // Store the handle on the policy for cleanup (done promise + cancel)
+    (policy as unknown as Record<string, unknown>)._broker = broker;
+  } catch (err) {
+    console.error(
+      `[aves] broker start failed for run ${runId}: ${err}`,
+    );
   }
 
-  const permFlags = buildPermissionFlags(safePerms);
-
-  // Aves internal paths — explicitly denied even if allowlist overlaps
-  const avesDirUrl = new URL(".", import.meta.url).pathname;
-  const avesDenyPaths = [
-    avesDirUrl,
-    getAvesDataDir(),
-    getAvesConfigDir(),
-    getAvesStateDir(),
-    ...(extraDenyPaths ?? []),
-  ].filter(Boolean);
-  const denyFlags = buildDenyFlags(avesDenyPaths);
-
-  const args = [
-    "run",
-    "--no-prompt",
-    ...permFlags,
-    ...denyFlags,
-    BOOT_PATH,
+  // Spawn the child Deno process
+  const proc = spawnDenoWithBroker(
     realModulePath,
-  ];
+    runDir,
+    brokerPath,
+  );
 
-  const cmd = new Deno.Command("deno", {
-    args,
-    cwd: runDir,
-    stdout: "piped",
-    stderr: "piped",
-  });
+  // Wait for the subprocess to finish
+  const { code: exitCode, stdout: stdoutBytes, stderr: stderrBytes } =
+    await proc.output();
 
-  const proc = cmd.outputSync();
   const finishedAt = new Date();
   const finishedAtStr = finishedAt.toISOString();
   const durationMs = finishedAt.getTime() - startedAt.getTime();
 
-  const stdout = new TextDecoder().decode(proc.stdout);
-  const stderr = new TextDecoder().decode(proc.stderr);
-  const exitCode = proc.code;
+  // Cancel the broker
+  const broker = (policy as unknown as Record<string, unknown>)?._broker as {
+    cancel(): void;
+    done: Promise<void>;
+  } | undefined;
+  if (broker) {
+    broker.cancel();
+    try {
+      await broker.done;
+    } catch { /* broker cleanup is best-effort */ }
+  }
+
+  const stdout = new TextDecoder().decode(stdoutBytes);
+  const stderr = new TextDecoder().decode(stderrBytes);
 
   let output: unknown = null;
   let error: string | undefined;
@@ -186,6 +333,10 @@ async function runModuleInSandbox(
   };
 }
 
+// ============================================================
+// executeRun
+// ============================================================
+
 export async function executeRun(
   request: RunRequest,
   options?: { policy?: ServerPolicy },
@@ -215,6 +366,7 @@ export async function executeRun(
       userPerms,
       denied,
       "eval",
+      codeHash,
     );
 
     // Clean up eval dir (runModuleInSandbox cleans its own dir)
@@ -259,6 +411,7 @@ export interface SkillRunResult {
 
 /**
  * Execute a skill by its directory path.
+ * No longer uses skill.json — reads mod.ts, builds permissions from override.
  */
 export async function executeSkillRun(
   skillDir: string,
@@ -271,34 +424,30 @@ export async function executeSkillRun(
 ): Promise<SkillRunResult> {
   const runId = crypto.randomUUID();
 
-  const manifestResult = await loadSkillManifest(skillDir);
-  if (!manifestResult.ok) {
-    throw new Error(`Invalid skill at ${skillDir}: ${manifestResult.error}`);
-  }
-  const manifest = manifestResult.manifest;
-
-  // Merge permissions: manifest as base, request only shrinks
-  const override = options?.permissionsOverride ?? {};
-  const effectivePerms: Permissions = {};
-  for (const key of ["read", "write", "net", "env"] as const) {
-    const base = manifest.permissions[key] ?? [];
-    const over = override[key] ?? [];
-    if (over.length > 0) {
-      const shrunk = base.filter((p) => over.includes(p));
-      if (shrunk.length > 0) {
-        effectivePerms[key] = shrunk;
-      }
-    } else if (base.length > 0) {
-      effectivePerms[key] = base;
-    }
+  // Verify SKILL.md exists
+  try {
+    await Deno.stat(`${skillDir}/SKILL.md`);
+  } catch {
+    throw new Error(`Not a skill directory (SKILL.md not found): ${skillDir}`);
   }
 
+  // Read mod.ts for code hash
+  let codeHash: string | undefined;
+  try {
+    const modContent = await Deno.readTextFile(`${skillDir}/mod.ts`);
+    codeHash = await sha256Hex(modContent);
+  } catch {
+    throw new Error(`Skill entrypoint not found: ${skillDir}/mod.ts`);
+  }
+
+  const entrypoint = `${skillDir}/mod.ts`;
+
+  // Use permissions override as the base; no manifest to merge with
+  const effectivePerms = options?.permissionsOverride ?? {};
   const { granted, denied } = resolvePermissions(
     effectivePerms,
     options?.policy,
   );
-  const entrypoint = resolveSkillEntrypoint(skillDir, manifest);
-  const realSkillDir = await Deno.realPath(skillDir);
 
   const record = await runModuleInSandbox(
     runId,
@@ -308,15 +457,18 @@ export async function executeSkillRun(
     effectivePerms,
     denied,
     "skill",
-    [realSkillDir],
   );
 
   record.skill_path = skillDir;
   record.project_path = options?.projectPath;
-  record.schema_hash = await hashManifest(manifest);
+  record.code_hash = codeHash;
 
   return { record };
 }
+
+// ============================================================
+// Helpers
+// ============================================================
 
 async function sha256Hex(input: string): Promise<string> {
   const enc = new TextEncoder();

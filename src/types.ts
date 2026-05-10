@@ -5,12 +5,10 @@ export type {
   RunRecord,
   RunRequest,
   ScriptMode,
-  SkillManifest,
 } from "./schemas.ts";
 export {
   PermissionsSchema,
   RunRecordSchema,
   RunRequestSchema,
   ScriptModeSchema,
-  SkillManifestSchema,
 } from "./schemas.ts";

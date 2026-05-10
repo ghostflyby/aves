@@ -62,14 +62,6 @@ export const RunRecordSchema = z.object({
   code: z.string().optional(),
 });
 
-export const SkillManifestSchema = z.object({
-  version: z.string().optional(),
-  permissions: PermissionsSchema,
-  input_schema: z.record(z.string(), z.unknown()).optional(),
-  entrypoint: z.string().default("./mod.ts"),
-  permission_justifications: z.record(z.string(), z.string()).optional(),
-});
-
 // ============================================================
 // Inferred TypeScript types
 // ============================================================
@@ -78,4 +70,3 @@ export type ScriptMode = z.infer<typeof ScriptModeSchema>;
 export type Permissions = z.infer<typeof PermissionsSchema>;
 export type RunRequest = z.infer<typeof RunRequestSchema>;
 export type RunRecord = z.infer<typeof RunRecordSchema>;
-export type SkillManifest = z.infer<typeof SkillManifestSchema>;
