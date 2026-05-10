@@ -1,5 +1,4 @@
 import { parse as parseYaml } from "@std/yaml";
-import { resolvePermissions } from "./policy.ts";
 import {
   ensureSkillRoots,
   getSkillRoots,
@@ -198,22 +197,6 @@ export async function promoteRunToSkill(
 
   const warnings: string[] = [];
 
-  if (!run.schema_hash) {
-    warnings.push(
-      "No inputSchema: consider adding Zod schema to mod.ts and inlining it in SKILL.md",
-    );
-  }
-
-  const { denied } = resolvePermissions(run.granted_permissions);
-  if (denied.length > 0) {
-    return {
-      ok: false,
-      error: `Cannot promote: permissions were denied for: ${
-        denied.join(", ")
-      }`,
-    };
-  }
-
   await ensureSkillRoots();
   const skillRoot = await getWritableSkillRoot();
   const skillDir = `${skillRoot}/${name}`;
@@ -268,7 +251,6 @@ export default {
     "No examples/test auto-generated for safety — consider adding examples.json and test.ts manually",
   );
 
-  run.promoted_to_skill = skillDir;
   await saveRun(run);
 
   return { ok: true, skillDir, warnings };

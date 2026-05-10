@@ -16,6 +16,7 @@ import {
 // ============================================================
 
 const db = new DatabaseSync(getAvesDbPath());
+
 db.exec("PRAGMA journal_mode=WAL");
 
 db.exec(RUNS_TABLE_DDL);
@@ -30,34 +31,9 @@ try {
   // DB may be read-only
 }
 
-// Migrate: add new columns if missing
-for (const col of ["input_schema_json TEXT", "code TEXT"]) {
-  try {
-    db.exec(`ALTER TABLE runs
-            ADD COLUMN ${col}`);
-  } catch {
-    // Column already exists
-  }
-}
-
-db.exec(`
-    CREATE TABLE IF NOT EXISTS skill_approvals
-    (
-        skill_path        TEXT PRIMARY KEY,
-        manifest_hash     TEXT NOT NULL,
-        content_hash      TEXT,
-        approved_at       TEXT NOT NULL,
-        requires_approval BOOLEAN DEFAULT true
-    )
-`);
-
 db.exec("CREATE INDEX IF NOT EXISTS idx_runs_mode ON runs(mode)");
 db.exec("CREATE INDEX IF NOT EXISTS idx_runs_code_hash ON runs(code_hash)");
-db.exec("CREATE INDEX IF NOT EXISTS idx_runs_schema_hash ON runs(schema_hash)");
 db.exec("CREATE INDEX IF NOT EXISTS idx_runs_started_at ON runs(started_at)");
-db.exec(
-  "CREATE INDEX IF NOT EXISTS idx_runs_project_path ON runs(project_path)",
-);
 
 // ============================================================
 // Row serialization helpers
@@ -85,18 +61,9 @@ function rowToRecord(row: Record<string, unknown>): Record<string, unknown> {
     run_id: row.run_id as string,
     mode: row.mode as string,
     code_hash: row.code_hash as string | undefined,
-    schema_hash: row.schema_hash as string | undefined,
     raw_input: fromJson(row.raw_input) as Record<string, unknown> | undefined,
     parsed_input: fromJson(row.parsed_input) as
       | Record<string, unknown>
-      | undefined,
-    permissions: fromJson(row.permissions) as Record<string, string[]>,
-    granted_permissions: fromJson(row.granted_permissions) as Record<
-      string,
-      string[]
-    >,
-    denied_permissions: fromJson(row.denied_permissions) as
-      | string[]
       | undefined,
     stdout: row.stdout as string,
     stderr: row.stderr as string,
@@ -106,12 +73,6 @@ function rowToRecord(row: Record<string, unknown>): Record<string, unknown> {
     started_at: row.started_at as string,
     finished_at: row.finished_at as string,
     duration_ms: row.duration_ms as number,
-    project_path: row.project_path as string | undefined,
-    promoted_to_skill: row.promoted_to_skill as string | undefined,
-    skill_path: row.skill_path as string | undefined,
-    input_schema_json: fromJson(row.input_schema_json) as
-      | Record<string, unknown>
-      | undefined,
     code: row.code as string | undefined,
   };
 }
@@ -123,30 +84,16 @@ function rowToRecord(row: Record<string, unknown>): Record<string, unknown> {
 const handlers: Record<string, (...args: unknown[]) => unknown> = {
   saveRun(...recordArr: unknown[]) {
     const r = recordArr[0] as Record<string, unknown>;
-    db.prepare(`INSERT OR
-REPLACE INTO runs
-(run_id, mode, code_hash, schema_hash,
- raw_input, parsed_input, permissions, granted_permissions, denied_permissions,
- stdout, stderr, exit_code, output, error,
- started_at, finished_at, duration_ms,
- project_path, promoted_to_skill, skill_path,
- input_schema_json, code)
-VALUES (?, ?, ?, ?,
-        ?, ?, ?, ?, ?,
-        ?, ?, ?, ?, ?,
-        ?, ?, ?,
-        ?, ?, ?,
-        ?, ?)
-    `).run(
+    db.prepare(`INSERT OR REPLACE INTO runs
+      (run_id, mode, code_hash, raw_input, parsed_input,
+       stdout, stderr, exit_code, output, error,
+       started_at, finished_at, duration_ms, code)
+      VALUES (?,?,?,?,?, ?,?,?,?,?, ?,?,?,?)`).run(
       r.run_id,
       r.mode,
       r.code_hash ?? null,
-      r.schema_hash ?? null,
       toJson(r.raw_input),
       toJson(r.parsed_input),
-      toJson(r.permissions),
-      toJson(r.granted_permissions),
-      toJson(r.denied_permissions),
       r.stdout ?? "",
       r.stderr ?? "",
       r.exit_code,
@@ -155,10 +102,6 @@ VALUES (?, ?, ?, ?,
       r.started_at,
       r.finished_at,
       r.duration_ms,
-      r.project_path ?? null,
-      r.promoted_to_skill ?? null,
-      r.skill_path ?? null,
-      toJson(r.input_schema_json),
       r.code ?? null,
     );
     return null;
@@ -188,15 +131,6 @@ VALUES (?, ?, ?, ?,
       where.push("mode = ?");
       values.push(f.mode as string);
     }
-    if (f.schema_hash !== undefined) {
-      where.push("schema_hash = ?");
-      values.push(f.schema_hash as string);
-    }
-    if (f.has_schema !== undefined) {
-      where.push(
-        f.has_schema ? "schema_hash IS NOT NULL" : "schema_hash IS NULL",
-      );
-    }
     if (f.exit_code !== undefined) {
       where.push("exit_code = ?");
       values.push(f.exit_code as number);
@@ -224,46 +158,6 @@ VALUES (?, ?, ?, ?,
       f.limit ?? 100,
       f.offset ?? 0,
     )).map(rowToRecord);
-  },
-  saveSkillApproval(...approvalArr: unknown[]) {
-    // deno-lint-ignore no-explicit-any
-    const a = approvalArr[0] as any;
-    db.prepare(`
-            INSERT OR
-            REPLACE
-            INTO skill_approvals
-            (skill_path, manifest_hash, content_hash, approved_at, requires_approval)
-            VALUES (?, ?, ?, ?, ?)
-        `).run(
-      a.skillPath,
-      a.manifestHash,
-      a.contentHash ?? null,
-      a.approvedAt,
-      a.requiresApproval ? 1 : 0,
-    );
-    return null;
-  },
-
-  loadSkillApproval(...skillPathArr: unknown[]) {
-    const skillPath = skillPathArr[0] as string;
-    const row = db.prepare("SELECT * FROM skill_approvals WHERE skill_path = ?")
-      .get(skillPath) as Record<string, unknown> | undefined;
-    if (!row) return null;
-    return {
-      skillPath: row.skill_path as string,
-      manifestHash: row.manifest_hash as string,
-      contentHash: row.content_hash as string | undefined,
-      approvedAt: row.approved_at as string,
-      requiresApproval: (row.requires_approval as number) === 1,
-    };
-  },
-
-  removeSkillApproval(...skillPathArr: unknown[]) {
-    const skillPath = skillPathArr[0] as string;
-    db.prepare("DELETE FROM skill_approvals WHERE skill_path = ?").run(
-      skillPath,
-    );
-    return null;
   },
 
   saveScriptApproval(...approvalArr: unknown[]) {
@@ -327,6 +221,7 @@ VALUES (?, ?, ?, ?,
     return null;
   },
 };
+
 // ============================================================
 // Message dispatch
 // ============================================================

@@ -69,8 +69,6 @@ export async function listRuns(): Promise<RunRecord[]> {
 
 export interface RunFilters {
   mode?: string;
-  schema_hash?: string;
-  has_schema?: boolean;
   exit_code?: number;
   started_after?: string;
   started_before?: string;
@@ -84,50 +82,6 @@ export async function listRunsFiltered(
   filters: RunFilters,
 ): Promise<RunRecord[]> {
   return await callWorker<RunRecord[]>("listRunsFiltered", filters);
-}
-
-export async function findClusteredRuns(): Promise<{
-  schema_hash: string;
-  count: number;
-  runs: RunRecord[];
-}[]> {
-  return await callWorker("findClusteredRuns");
-}
-
-export async function findRepeatedRuns(): Promise<{
-  code_hash: string;
-  count: number;
-  runs: RunRecord[];
-}[]> {
-  return await callWorker("findRepeatedRuns");
-}
-
-// ============================================================
-// Skill approvals
-// ============================================================
-
-export interface SkillApproval {
-  skillPath: string;
-  manifestHash: string;
-  contentHash?: string;
-  approvedAt: string;
-  requiresApproval: boolean;
-}
-
-export async function saveSkillApproval(
-  approval: SkillApproval,
-): Promise<void> {
-  await callWorker("saveSkillApproval", approval);
-}
-
-export async function loadSkillApproval(
-  skillPath: string,
-): Promise<SkillApproval | null> {
-  return await callWorker<SkillApproval | null>("loadSkillApproval", skillPath);
-}
-
-export async function removeSkillApproval(skillPath: string): Promise<void> {
-  await callWorker("removeSkillApproval", skillPath);
 }
 
 // ============================================================

@@ -10,11 +10,8 @@ const TEST_RUN: RunRecord = {
   run_id: "test-promote-001",
   mode: "eval",
   code_hash: "abc123",
-  schema_hash: "schema-hash",
   raw_input: { text: "hello" },
   parsed_input: { text: "hello" },
-  permissions: { read: ["/tmp/data"] },
-  granted_permissions: { read: ["/tmp/data"] },
   stdout: "",
   stderr: "",
   exit_code: 0,
@@ -38,14 +35,7 @@ export default async function main(input: z.infer<typeof inputSchema>) {
       b.toString(16).padStart(2, "0")
     ).join(""),
   };
-}`,
-  input_schema_json: {
-    $schema: "https://json-schema.org/draft/2020-12/schema",
-    type: "object",
-    properties: { text: { type: "string" } },
-    required: ["text"],
-    additionalProperties: false,
-  },
+  }`,
 };
 
 // ============================================================
@@ -112,32 +102,6 @@ Deno.test("promoteRunToSkill - creates skill files on disk (no skill.json)", asy
 Deno.test("promoteRunToSkill - invalid name rejected", async () => {
   const result = await promoteRunToSkill(TEST_RUN, "Invalid Name!", "test");
   assertEquals(result.ok, false);
-});
-
-Deno.test("promoteRunToSkill - no schema_hash allowed with warning", async () => {
-  const prevData = Deno.env.get("AVES_DATA_DIR");
-  Deno.env.set("AVES_DATA_DIR", "/tmp/aves-test-no-schema");
-  const noSchema = {
-    ...TEST_RUN,
-    schema_hash: undefined,
-    parsed_input: undefined,
-    input_schema_json: undefined,
-  };
-  const result = await promoteRunToSkill(noSchema, "no-schema", "test");
-  assertEquals(result.ok, true);
-  if (result.ok) {
-    const hasSchemaWarning = result.warnings.some((w) =>
-      w.includes("inputSchema")
-    );
-    assertEquals(hasSchemaWarning, true);
-  }
-  try {
-    await Deno.remove("/tmp/aves-test-no-schema", { recursive: true });
-  } catch {
-    /* skip */
-  }
-  if (prevData) Deno.env.set("AVES_DATA_DIR", prevData);
-  else Deno.env.delete("AVES_DATA_DIR");
 });
 
 Deno.test("listSkills - returns empty for clean state", async () => {

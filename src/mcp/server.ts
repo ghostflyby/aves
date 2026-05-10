@@ -13,14 +13,7 @@ import {
 import { z } from "zod";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { executeRun, executeSkillRun } from "../runner.ts";
-import {
-  findClusteredRuns,
-  findRepeatedRuns,
-  listRuns,
-  listRunsFiltered,
-  loadRun,
-  saveRun,
-} from "../run-store.ts";
+import { listRuns, listRunsFiltered, loadRun, saveRun } from "../run-store.ts";
 import { RunRequestSchema } from "../schemas.ts";
 import {
   handleListResources,
@@ -573,72 +566,44 @@ async function handleSuggestSkills(args: Record<string, unknown>) {
     );
   }
 
-  const { min_runs, cluster_by } = parsed.data;
-  const suggestions: Record<string, unknown>[] = [];
-  let totalClusters = 0;
+  const { min_runs } = parsed.data;
+  const { queryRuns } = await import("./query-pool.ts");
+  const result = await queryRuns(
+    `SELECT code_hash, COUNT(*) as count
+     FROM runs
+     WHERE code_hash IS NOT NULL
+     GROUP BY code_hash
+     HAVING count >= ?
+     ORDER BY count DESC`,
+    [min_runs],
+    10000,
+  );
 
-  if (cluster_by === "schema" || cluster_by === "both") {
-    const clusters = await findClusteredRuns();
-    const filtered = clusters.filter((c) => c.count >= min_runs);
-    totalClusters += filtered.length;
-
-    for (const c of filtered) {
-      const suggestedName = c.runs[c.runs.length - 1]?.raw_input
-        ? Object.keys(c.runs[c.runs.length - 1]!.raw_input!).slice(0, 4).join(
-          "_",
-        ).toLowerCase()
-          .replace(/[^a-z0-9_]/g, "_").replace(/_+/, "_").replace(
-            /^_|_$/g,
-            "",
-          )
-        : undefined;
-
-      suggestions.push({
-        dimension: "schema",
-        schema_hash: c.schema_hash,
-        run_count: c.count,
-        first_run: c.runs[c.runs.length - 1]?.started_at,
-        last_run: c.runs[0]?.started_at,
-        sample_input: c.runs[0]?.raw_input,
-        sample_output: c.runs[0]?.output,
-        suggested_name: suggestedName,
-      });
-    }
+  if (!result.ok || !result.rows) {
+    return {
+      content: [{
+        type: "text",
+        text: JSON.stringify({ suggestions: [], total_clusters: 0 }),
+      }],
+    };
   }
 
-  if (cluster_by === "code" || cluster_by === "both") {
-    const clusters = await findRepeatedRuns();
-    const filtered = clusters.filter((c) => c.count >= min_runs);
-    totalClusters += filtered.length;
-
-    for (const c of filtered) {
-      const suggestedName = c.runs[c.runs.length - 1]?.raw_input
-        ? Object.keys(c.runs[c.runs.length - 1]!.raw_input!).slice(0, 4).join(
-          "_",
-        ).toLowerCase()
-          .replace(/[^a-z0-9_]/g, "_").replace(/_+/, "_").replace(
-            /^_|_$/g,
-            "",
-          )
-        : undefined;
-
-      suggestions.push({
-        dimension: "code",
-        code_hash: c.code_hash,
-        run_count: c.count,
-        first_run: c.runs[c.runs.length - 1]?.started_at,
-        last_run: c.runs[0]?.started_at,
-        sample_input: c.runs[0]?.raw_input,
-        sample_output: c.runs[0]?.output,
-        suggested_name: suggestedName,
-      });
-    }
+  const suggestions: Record<string, unknown>[] = [];
+  for (const row of result.rows) {
+    suggestions.push({
+      dimension: "code",
+      code_hash: row.code_hash,
+      run_count: row.count,
+    });
   }
 
   return {
     content: [{
       type: "text",
-      text: JSON.stringify({ suggestions, total_clusters: totalClusters }),
+      text: JSON.stringify({
+        suggestions,
+        total_clusters: suggestions.length,
+      }),
     }],
   };
 }

@@ -34,7 +34,7 @@ export const RunSkillInputSchema = z.object({
 export const SuggestSkillsInputSchema = z.object({
   min_runs: z.number().int().min(1).default(2)
     .describe("Minimum runs to consider a cluster"),
-  cluster_by: z.enum(["schema", "code", "both"]).default("schema")
+  cluster_by: z.enum(["code"]).default("code")
     .describe("Clustering dimension"),
 });
 
@@ -48,9 +48,6 @@ export const PromoteToSkillInputSchema = z.object({
 
 export const ListRunsInputSchema = z.object({
   mode: z.enum(["eval", "module", "skill"]).describe("Filter by execution mode")
-    .optional(),
-  schema_hash: z.string().describe("Filter by exact schema hash").optional(),
-  has_schema: z.boolean().describe("Filter runs with/without schema_hash")
     .optional(),
   exit_code: z.number().int().describe("Filter by exact exit code").optional(),
   started_after: z.string().describe(

@@ -90,8 +90,6 @@ Deno.test("run-store - save and load", async () => {
   const record: RunRecord = {
     run_id: "test-run-001",
     mode: "eval",
-    permissions: {},
-    granted_permissions: {},
     stdout: "",
     stderr: "",
     exit_code: 0,

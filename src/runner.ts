@@ -248,9 +248,9 @@ async function runModuleInSandbox(
   runId: string,
   modulePath: string,
   input: Record<string, unknown>,
-  granted: Permissions,
-  userPerms: Permissions,
-  denied: string[],
+  _granted: Permissions,
+  _userPerms: Permissions,
+  _denied: string[],
   mode: RunRecord["mode"],
   codeHash?: string | null,
   codexCeiling?: SandboxState | null,
@@ -334,24 +334,11 @@ async function runModuleInSandbox(
   }
 
   let parsedInput: Record<string, unknown> | undefined;
-  let schemaHash: string | undefined;
   try {
     parsedInput = JSON.parse(
       await Deno.readTextFile(`${realRunDir}/parsed_input.json`),
     );
   } catch { /* no-op */ }
-  try {
-    schemaHash = (await Deno.readTextFile(`${realRunDir}/schema_hash.txt`))
-      .trim();
-  } catch { /* no-op */ }
-
-  let inputSchemaJson: Record<string, unknown> | undefined;
-  try {
-    inputSchemaJson = JSON.parse(
-      await Deno.readTextFile(`${realRunDir}/schema.json`),
-    );
-  } catch { /* no-op */ }
-
   try {
     await Deno.remove(runDir, { recursive: true });
   } catch { /* best-effort */ }
@@ -360,12 +347,8 @@ async function runModuleInSandbox(
     run_id: runId,
     mode,
     code_hash: undefined,
-    schema_hash: schemaHash,
     raw_input: input,
     parsed_input: parsedInput,
-    permissions: userPerms,
-    granted_permissions: granted,
-    denied_permissions: denied.length > 0 ? denied : undefined,
     stdout,
     stderr,
     exit_code: exitCode,
@@ -374,7 +357,6 @@ async function runModuleInSandbox(
     started_at: startedAtStr,
     finished_at: finishedAtStr,
     duration_ms: durationMs,
-    input_schema_json: inputSchemaJson,
     code: undefined,
   };
 }
@@ -513,8 +495,6 @@ export async function executeSkillRun(
     skillDir,
   );
 
-  record.skill_path = skillDir;
-  record.project_path = options?.projectPath;
   record.code_hash = codeHash;
 
   return { record };
