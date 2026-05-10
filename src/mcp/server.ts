@@ -45,7 +45,7 @@ import {
   SuggestSkillsInputSchema,
 } from "./tool-schemas.ts";
 
-import { extractSandboxState, type SandboxState } from "../sandbox-state.ts";
+import { extractSandboxState } from "../sandbox-state.ts";
 import {
   applyCodexCeiling,
   isReadOnly,
@@ -570,7 +570,7 @@ async function handleRunSkill(args: Record<string, unknown>, meta: unknown) {
   const sandboxState = extractSandboxState(meta);
 
   // Compute effective permissions (manifest ∩ override, same as executeSkillRun does)
-  let effectivePerms: Record<string, string[] | undefined> = {};
+  const effectivePerms: Record<string, string[] | undefined> = {};
   const manifestResult = await loadSkillManifest(skill_path);
   if (manifestResult.ok) {
     const manifest = manifestResult.manifest;
@@ -852,7 +852,7 @@ export async function startHttpServer(
       const { name, arguments: args } = request.params;
       switch (name) {
         case "run_script": {
-          const meta = (request.params as any)?._meta;
+          const meta = (request.params as Record<string, unknown>)?._meta;
           return await handleRunScript(args ?? {}, meta);
         }
         case "replay_run":
@@ -860,7 +860,7 @@ export async function startHttpServer(
         case "list_runs":
           return await handleListRuns();
         case "run_skill": {
-          const meta = (request.params as any)?._meta;
+          const meta = (request.params as Record<string, unknown>)?._meta;
           return await handleRunSkill(args ?? {}, meta);
         }
         case "suggest_skills":
@@ -945,15 +945,16 @@ export async function startServer() {
       const { name, arguments: args } = request.params;
 
       switch (name) {
-        case "run_script":
-          const meta = (request.params as any)?._meta;
+        case "run_script": {
+          const meta = (request.params as Record<string, unknown>)?._meta;
           return await handleRunScript(args ?? {}, meta);
+        }
         case "replay_run":
           return await handleReplayRun(args ?? {});
         case "list_runs":
           return await handleListRuns(args ?? {});
         case "run_skill": {
-          const meta = (request.params as any)?._meta;
+          const meta = (request.params as Record<string, unknown>)?._meta;
           return await handleRunSkill(args ?? {}, meta);
         }
         case "suggest_skills":
