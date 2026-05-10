@@ -2,7 +2,7 @@
 const modulePath = Deno.env.get("AVES_PERMISSION_MODULE");
 if (!modulePath) throw new Error("AVES_PERMISSION_MODULE not set");
 
-type PermissionFn = (value: string) => "allow" | "deny" | undefined;
+type PermissionFn = (value: string) => boolean | undefined;
 
 let mod: Record<string, PermissionFn> | null = null;
 
@@ -22,10 +22,11 @@ ctx.onmessage = async (e: MessageEvent) => {
   }
 
   const fn = mod[permission];
-  let result: "allow" | "deny" | undefined;
+  let result: boolean | undefined;
   if (typeof fn === "function") {
     try {
       result = fn(value);
+      if (typeof result === "boolean") result = result ? "allow" : "deny";
     } catch {
       result = undefined;
     }

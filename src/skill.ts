@@ -253,11 +253,11 @@ export default async function main(input: unknown) {
 // Return "allow", "deny", or undefined (let broker decide).
 // Remove this file if not needed.
 export default {
-  read(path: string) {},
-  write(path: string) {},
-  net(host: string) {},
-  env(name: string) {},
-  sys(name: string) {},
+  read(path: string): boolean | undefined {},
+  write(path: string): boolean | undefined {},
+  net(host: string): boolean | undefined {},
+  env(name: string): boolean | undefined {},
+  sys(name: string): boolean | undefined {},
 };
 `;
   await Deno.writeTextFile(`${skillDir}/mod.permission.ts`, permTemplate);
