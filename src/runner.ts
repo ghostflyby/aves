@@ -116,7 +116,7 @@ function isDefaultAllowed(
       return DEFAULT_ALLOWED_ENV.has(req.value);
     case "read":
     case "write":
-      return resolveTempDirs().some((d) => req.value.startsWith(d + "/"));
+      return resolveTempDirs().some((d) => pathMatches(d + "/", req.value));
     case "net": {
       const reqHost = req.value.split(":")[0];
       return BROKER_NET_ALLOW.some((d) => reqHost === d);
