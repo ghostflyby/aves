@@ -178,16 +178,25 @@ function createRunBrokerPolicy(
 
   return {
     async decide(req) {
+      // Resolve relative paths against the run directory
+      const resolvedValue = req.value.startsWith("/") || !extraDirs[0]
+        ? req.value
+        : `${extraDirs[0]}/${req.value.replace(/^\.\//, "")}`;
+      const resolvedReq = { ...req, value: resolvedValue };
       // Always allow safe defaults (no ceiling or trust needed)
-      if (isDefaultAllowed(req)) return "allow";
+      if (isDefaultAllowed(resolvedReq)) return "allow";
       if (
-        (req.permission === "read" || req.permission === "write") &&
-        extraDirs.some((d) => req.value.startsWith(d + "/"))
+        (resolvedReq.permission === "read" ||
+          resolvedReq.permission === "write") &&
+        extraDirs.some((d) => resolvedValue.startsWith(d + "/"))
       ) return "allow";
 
       // Check permission module for fine-grained rules (before ceiling)
       if (permModule) {
-        const permResult = await permModule.decide(req.permission, req.value);
+        const permResult = await permModule.decide(
+          resolvedReq.permission,
+          resolvedValue,
+        );
         if (permResult === "deny") {
           return { deny: "denied by skill permission module" };
         }
@@ -197,7 +206,7 @@ function createRunBrokerPolicy(
 
       // Check Codex ceiling
       if (codexCeiling) {
-        const ceilingResult = checkCeiling(req, codexCeiling);
+        const ceilingResult = checkCeiling(resolvedReq, codexCeiling);
         if (ceilingResult === "deny") {
           return { deny: "outside Codex sandbox" };
         }
@@ -232,14 +241,17 @@ function createRunBrokerPolicy(
 
       // No ceiling info — check permission module for non-read, otherwise allow reads
       if (permModule) {
-        const permResult = await permModule.decide(req.permission, req.value);
+        const permResult = await permModule.decide(
+          resolvedReq.permission,
+          resolvedValue,
+        );
         if (permResult === "deny") {
           return { deny: "denied by skill permission module" };
         }
         if (permResult === "allow") return "allow";
         // null → fall through to deny
       }
-      if (req.permission === "read") return "allow";
+      if (resolvedReq.permission === "read") return "allow";
       return { deny: "outside Codex sandbox" };
     },
 
