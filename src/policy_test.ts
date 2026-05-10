@@ -4,6 +4,12 @@ import {
   resolvePermissions,
   type ServerPolicy,
 } from "./policy.ts";
+import {
+  applyCodexCeiling,
+  isReadOnly,
+  isWithinCodexCeiling,
+} from "./policy.ts";
+import type { SandboxState } from "./sandbox-state.ts";
 
 Deno.test("resolvePermissions - grants requested perms by default", () => {
   const { granted, denied } = resolvePermissions({
@@ -78,4 +84,177 @@ Deno.test("isForbidden - run and ffi", () => {
   assertEquals(isForbidden("ffi"), true);
   assertEquals(isForbidden("read"), false);
   assertEquals(isForbidden("net"), false);
+});
+
+// ============================================================
+// applyCodexCeiling, isWithinCodexCeiling, isReadOnly tests
+// ============================================================
+
+/** Mock sandbox state with restricted read/write but network disabled (no net). */
+const mockRestrictedNoNet: SandboxState = {
+  meta: {
+    permissionProfile: {
+      type: "managed",
+      file_system: {
+        type: "restricted",
+        entries: [
+          {
+            path: { type: "path", path: "/Users/ghostflyby/repos/learn/aves" },
+            access: "read",
+          },
+          {
+            path: { type: "path", path: "/Users/ghostflyby/repos/learn/aves" },
+            access: "write",
+          },
+          { path: { type: "path", path: "/tmp" }, access: "write" },
+        ],
+      },
+      network: "disabled",
+    },
+    sandboxPolicy: {
+      type: "workspace-write",
+      writable_roots: [],
+      network_access: false,
+      exclude_tmpdir_env_var: false,
+      exclude_slash_tmp: false,
+    },
+    codexLinuxSandboxExe: null,
+    sandboxCwd: "/Users/ghostflyby/repos/learn/aves",
+    useLegacyLandlock: false,
+  },
+  workspaces: ["/Users/ghostflyby/repos/learn/aves"],
+};
+
+/** Mock sandbox state with network fully enabled. */
+const mockRestrictedWithNet: SandboxState = {
+  ...mockRestrictedNoNet,
+  meta: {
+    ...mockRestrictedNoNet.meta,
+    permissionProfile: {
+      ...mockRestrictedNoNet.meta.permissionProfile,
+      network: "enabled",
+    },
+    sandboxPolicy: {
+      ...mockRestrictedNoNet.meta.sandboxPolicy,
+      network_access: true,
+    },
+  },
+};
+
+Deno.test("applyCodexCeiling - read within ceiling", () => {
+  const { granted, dropped } = applyCodexCeiling(
+    { read: ["/Users/ghostflyby/repos/learn/aves/src"] },
+    mockRestrictedNoNet,
+  );
+  assertEquals(granted.read, ["/Users/ghostflyby/repos/learn/aves/src"]);
+  assertEquals(dropped.read, undefined);
+});
+
+Deno.test("applyCodexCeiling - read outside ceiling", () => {
+  const { granted, dropped } = applyCodexCeiling(
+    { read: ["/etc/passwd"] },
+    mockRestrictedNoNet,
+  );
+  assertEquals(granted.read, undefined);
+  assertEquals(dropped.read, ["/etc/passwd"]);
+});
+
+Deno.test("applyCodexCeiling - write within ceiling", () => {
+  const { granted, dropped } = applyCodexCeiling(
+    { write: ["/tmp/myfile"] },
+    mockRestrictedNoNet,
+  );
+  assertEquals(granted.write, ["/tmp/myfile"]);
+  assertEquals(dropped.write, undefined);
+});
+
+Deno.test("applyCodexCeiling - write outside ceiling", () => {
+  const { granted, dropped } = applyCodexCeiling(
+    { write: ["/etc/hosts"] },
+    mockRestrictedNoNet,
+  );
+  assertEquals(granted.write, undefined);
+  assertEquals(dropped.write, ["/etc/hosts"]);
+});
+
+Deno.test("applyCodexCeiling - net allowed when network enabled", () => {
+  const { granted, dropped } = applyCodexCeiling(
+    { net: ["api.github.com", "evil.com"] },
+    mockRestrictedWithNet,
+  );
+  // network is fully enabled, all targets pass
+  assertEquals(granted.net, ["api.github.com", "evil.com"]);
+  assertEquals(dropped.net, undefined);
+});
+
+Deno.test("applyCodexCeiling - net dropped when network disabled", () => {
+  const { granted, dropped } = applyCodexCeiling(
+    { net: ["api.github.com"] },
+    mockRestrictedNoNet,
+  );
+  assertEquals(granted.net, undefined);
+  assertEquals(dropped.net, ["api.github.com"]);
+});
+
+Deno.test("applyCodexCeiling - mixed read+write+net", () => {
+  const { granted, dropped } = applyCodexCeiling(
+    {
+      read: ["/Users/ghostflyby/repos/learn/aves/src", "/etc/shadow"],
+      write: ["/tmp/ok", "/etc/nope"],
+      net: ["api.github.com", "evil.com"],
+    },
+    mockRestrictedWithNet,
+  );
+  assertEquals(granted.read, ["/Users/ghostflyby/repos/learn/aves/src"]);
+  assertEquals(dropped.read, ["/etc/shadow"]);
+  assertEquals(granted.write, ["/tmp/ok"]);
+  assertEquals(dropped.write, ["/etc/nope"]);
+  // network is fully enabled, all net passes
+  assertEquals(granted.net, ["api.github.com", "evil.com"]);
+  assertEquals(dropped.net, undefined);
+});
+
+Deno.test("applyCodexCeiling - null sandbox state passes all", () => {
+  const { granted, dropped } = applyCodexCeiling(
+    { read: ["/anywhere"], write: ["/anywhere"], net: ["anything.com"] },
+    null,
+  );
+  assertEquals(granted.read, ["/anywhere"]);
+  assertEquals(granted.write, ["/anywhere"]);
+  assertEquals(granted.net, ["anything.com"]);
+  assertEquals(dropped.read, undefined);
+  assertEquals(dropped.write, undefined);
+  assertEquals(dropped.net, undefined);
+});
+
+Deno.test("isWithinCodexCeiling - true when no drops", () => {
+  assertEquals(isWithinCodexCeiling({}), true);
+});
+
+Deno.test("isWithinCodexCeiling - false when read dropped", () => {
+  assertEquals(isWithinCodexCeiling({ read: ["/etc/passwd"] }), false);
+});
+
+Deno.test("isWithinCodexCeiling - false when write dropped", () => {
+  assertEquals(isWithinCodexCeiling({ write: ["/etc/hosts"] }), false);
+});
+
+Deno.test("isReadOnly - true for read only", () => {
+  assertEquals(isReadOnly({ read: ["/tmp"] }), true);
+});
+
+Deno.test("isReadOnly - false with write", () => {
+  assertEquals(isReadOnly({ read: ["/tmp"], write: ["/tmp"] }), false);
+});
+
+Deno.test("isReadOnly - false with net", () => {
+  assertEquals(isReadOnly({ read: ["/tmp"], net: ["example.com"] }), false);
+});
+
+Deno.test("isReadOnly - false with env", () => {
+  assertEquals(isReadOnly({ read: ["/tmp"], env: ["FOO"] }), false);
+});
+
+Deno.test("isReadOnly - false with no read", () => {
+  assertEquals(isReadOnly({ write: ["/tmp"] }), false);
 });

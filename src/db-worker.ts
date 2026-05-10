@@ -5,7 +5,7 @@
 
 import { DatabaseSync } from "node:sqlite";
 import { getAvesDbPath } from "./paths.ts";
-import { RUNS_TABLE_DDL } from "./db-schema.ts";
+import { RUNS_TABLE_DDL, SCRIPT_APPROVALS_TABLE_DDL } from "./db-schema.ts";
 
 // ============================================================
 // Database initialization
@@ -15,6 +15,11 @@ const db = new DatabaseSync(getAvesDbPath());
 db.exec("PRAGMA journal_mode=WAL");
 
 db.exec(RUNS_TABLE_DDL);
+try {
+  db.exec(SCRIPT_APPROVALS_TABLE_DDL);
+} catch {
+  // DB may be read-only (e.g., test environment)
+}
 
 // Migrate: add new columns if missing
 for (const col of ["input_schema_json TEXT", "code TEXT"]) {
@@ -248,6 +253,46 @@ VALUES (?, ?, ?, ?,
     const skillPath = skillPathArr[0] as string;
     db.prepare("DELETE FROM skill_approvals WHERE skill_path = ?").run(
       skillPath,
+    );
+    return null;
+  },
+
+  saveScriptApproval(...approvalArr: unknown[]) {
+    const approval = approvalArr[0] as {
+      codeHash: string;
+      approvedAt: string;
+      permissions: Record<string, string[]>;
+    };
+    db.prepare(
+      `INSERT OR REPLACE INTO script_approvals (code_hash, approved_at, permissions_json) VALUES (?, ?, ?)`,
+    ).run(
+      approval.codeHash,
+      approval.approvedAt,
+      JSON.stringify(approval.permissions),
+    );
+    return null;
+  },
+
+  loadScriptApproval(...codeHashArr: unknown[]) {
+    const codeHash = codeHashArr[0] as string;
+    const row = db.prepare(
+      "SELECT code_hash, approved_at, permissions_json FROM script_approvals WHERE code_hash = ?",
+    ).get(codeHash) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return {
+      codeHash: row.code_hash as string,
+      approvedAt: row.approved_at as string,
+      permissions: JSON.parse(row.permissions_json as string) as Record<
+        string,
+        string[]
+      >,
+    };
+  },
+
+  removeScriptApproval(...codeHashArr: unknown[]) {
+    const codeHash = codeHashArr[0] as string;
+    db.prepare("DELETE FROM script_approvals WHERE code_hash = ?").run(
+      codeHash,
     );
     return null;
   },

@@ -165,6 +165,7 @@ export function resolveSkillEntrypoint(
 function generateSkillMarkdown(
   name: string,
   description: string,
+  manifest?: SkillManifest,
 ): string {
   const lines: string[] = [];
   lines.push("---");
@@ -201,6 +202,18 @@ function generateSkillMarkdown(
     "- This skill requires the `aves` MCP server to be configured and available",
   );
   lines.push("");
+
+  if (manifest?.permission_justifications) {
+    lines.push("## Permission Justifications");
+    lines.push("");
+    for (
+      const [path, reason] of Object.entries(manifest.permission_justifications)
+    ) {
+      lines.push(`- **${path}**: ${reason}`);
+    }
+    lines.push("");
+  }
+
   return lines.join("\n");
 }
 
@@ -320,7 +333,7 @@ export async function promoteRunToSkill(
 
   await Deno.writeTextFile(
     `${skillDir}/SKILL.md`,
-    generateSkillMarkdown(name, description),
+    generateSkillMarkdown(name, description, manifest),
   );
 
   const entrypointContent = options?.entrypointContent ??

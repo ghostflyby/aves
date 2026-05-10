@@ -32,6 +32,7 @@ import {
   approveSkill,
   checkSkillApproval,
   listSkills,
+  loadSkillManifest,
   promoteRunToSkill,
 } from "../skill.ts";
 import {
@@ -44,6 +45,15 @@ import {
   SuggestSkillsInputSchema,
 } from "./tool-schemas.ts";
 
+import { extractSandboxState, type SandboxState } from "../sandbox-state.ts";
+import {
+  applyCodexCeiling,
+  isReadOnly,
+  isWithinCodexCeiling,
+} from "../policy.ts";
+import { getConfig } from "../config.ts";
+import { loadScriptApproval, saveScriptApproval } from "../run-store.ts";
+
 // ============================================================
 // Tool definitions — inputSchema generated from Zod (single source of truth)
 // ============================================================
@@ -51,7 +61,7 @@ import {
 const RUN_SCRIPT_TOOL = {
   name: "run_script",
   description:
-    'Execute a TypeScript module in a sandboxed Deno subprocess. Script format: export default async function main(input: unknown) { ... } — the default export receives the `input` object and is awaited. Optionally export `inputSchema` (Zod@4 schema) for runtime input validation. Supports `import { z } from "zod"`, Deno built-ins, and node:compat libraries (node:fs, node:path, node:os). ES module format only. Use mode: "eval" with inline code, or mode: "module" with a modulePath. Runs with --no-prompt; permissions from the request parameter.',
+    'Execute a TypeScript module in a sandboxed Deno subprocess. Script format: export default async function main(input: unknown) { ... } — the default export receives the `input` object and is awaited. Optionally export `inputSchema` (Zod@4 schema) for runtime input validation. Supports `import { z } from "zod"`, Deno built-ins, and node:compat libraries (node:fs, node:path, node:os). ES module format only. Use mode: "eval" with inline code, or mode: "module" with a modulePath. Runs with --no-',
   inputSchema: RunScriptInputSchema.toJSONSchema(),
   annotations: { destructiveHint: true },
 };
@@ -138,23 +148,36 @@ function permsDesc(permissions: Record<string, string[] | undefined>): string {
   return parts.length > 0 ? parts.join("\n") : "(none)";
 }
 
-async function elicitScriptApproval(
-  mode: string,
-  permissions: Record<string, string[] | undefined>,
-): Promise<boolean> {
+/** Hash a string using SHA-256, return hex. */
+async function sha256Hex(input: string): Promise<string> {
+  const enc = new TextEncoder();
+  const data = enc.encode(input);
+  const hash = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(hash))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+/** Check if two permission objects match (same keys, same values). */
+function permissionsMatch(
+  a: Record<string, string[] | undefined>,
+  b: Record<string, string[] | undefined>,
+): boolean {
+  const allKeys = ["read", "write", "net", "env"] as const;
+  for (const k of allKeys) {
+    const aa = (a[k] ?? []).slice().sort();
+    const bb = (b[k] ?? []).slice().sort();
+    if (aa.length !== bb.length) return false;
+    if (!aa.every((v, i) => v === bb[i])) return false;
+  }
+  return true;
+}
+
+/** Send an elicitation/create request and return the raw result. */
+async function elicitRequest(msg: string): Promise<unknown> {
   const server = _mcpServer;
-  if (!server) return false;
-
-  const modeLabel = mode === "eval" ? "Eval" : "Module";
-  const hasPerms = Object.values(permissions).some((v) => v && v.length > 0);
-  if (!hasPerms) return true; // no permissions = no need to ask
-  const msg = hasPerms
-    ? `Approve ${modeLabel} script execution?\n\nRequested permissions:\n${
-      permsDesc(permissions)
-    }`
-    : `Approve ${modeLabel} script execution?\n\nNo special permissions requested.`;
-
-  const result = await server.request(
+  if (!server) return { action: "reject" };
+  return await server.request(
     {
       method: "elicitation/create",
       params: {
@@ -174,10 +197,123 @@ async function elicitScriptApproval(
     },
     ElicitationResponseSchema,
   );
+}
+
+async function elicitScriptApproval(
+  mode: string,
+  granted: Record<string, string[] | undefined>,
+  dropped: Record<string, string[] | undefined>,
+  codeHash: string | null,
+): Promise<boolean> {
+  const withinCeiling = isWithinCodexCeiling(dropped);
+
+  // --- C=N: paths exceed Codex ceiling ---
+  if (!withinCeiling) {
+    const parts: string[] = [];
+
+    if (dropped.read?.length) {
+      parts.push(
+        `Read paths outside Codex sandbox:\n${
+          permsDesc({ read: dropped.read })
+        }`,
+      );
+    }
+    if (dropped.net?.length) {
+      parts.push(
+        `Network targets outside Codex sandbox:\n${
+          permsDesc({ net: dropped.net })
+        }`,
+      );
+    }
+    if (dropped.write?.length) {
+      parts.push(
+        `Write paths DENIED (write cannot exceed Codex sandbox):\n${
+          permsDesc({ write: dropped.write })
+        }`,
+      );
+    }
+
+    if (parts.length === 0) return false;
+
+    const hasGrantable = (granted.read?.length ?? 0) > 0 ||
+      (granted.net?.length ?? 0) > 0;
+    const modeLabel = mode === "eval" ? "Eval" : "Module";
+    const preamble = hasGrantable
+      ? `Some ${modeLabel} script permissions exceed the Codex sandbox:\n\n`
+      : `${modeLabel} script cannot run — no permissions within Codex sandbox.`;
+    const msg = `${preamble}${parts.join("\n\n")}${
+      hasGrantable ? "\n\nApprove with restricted permissions?" : ""
+    }`;
+
+    const result = await elicitRequest(msg);
+    return isElicitationApproved(result);
+  }
+
+  // --- C=Y: all within ceiling ---
+
+  // Read-only + config auto-approve → silent
+  if (isReadOnly(granted)) {
+    try {
+      const config = await getConfig();
+      if (config.execution.autoApproveReadonly) {
+        return true;
+      }
+    } catch { /* config unreadable, fall through */ }
+  }
+
+  // Has write or net → check hash trust
+  const hasWrite = (granted.write?.length ?? 0) > 0;
+  const hasNet = (granted.net?.length ?? 0) > 0;
+
+  if (hasWrite || hasNet) {
+    if (codeHash) {
+      try {
+        const prev = await loadScriptApproval(codeHash);
+        if (prev) {
+          if (permissionsMatch(granted, prev.permissions)) {
+            return true; // Hash + permissions match → silent
+          }
+          // Permissions changed
+          const msg = [
+            `Script permissions changed since last approval.`,
+            ``,
+            `Previously approved:`,
+            permsDesc(prev.permissions),
+            ``,
+            `Now requested:`,
+            permsDesc(granted),
+            ``,
+            `Approve?`,
+          ].join("\n");
+          const result = await elicitRequest(msg);
+          return isElicitationApproved(result);
+        }
+      } catch { /* DB error, fall through to first-run path */ }
+    }
+
+    // First run with write/net → elicit
+    const modeLabel = mode === "eval" ? "Eval" : "Module";
+    const msg =
+      `Approve ${modeLabel} script execution?\n\nRequested permissions:\n${
+        permsDesc(granted)
+      }`;
+    const result = await elicitRequest(msg);
+    return isElicitationApproved(result);
+  }
+
+  // Read-only, config didn't allow silent → normal elicit (compat)
+  const modeLabel = mode === "eval" ? "Eval" : "Module";
+  const hasPerms = Object.values(granted).some((v) => v && v.length > 0);
+  if (!hasPerms) return true;
+  const msg =
+    `Approve ${modeLabel} script execution?\n\nRequested permissions:\n${
+      permsDesc(granted)
+    }`;
+  const result = await elicitRequest(msg);
   return isElicitationApproved(result);
 }
 
-async function handleRunScript(args: Record<string, unknown>) {
+async function handleRunScript(args: Record<string, unknown>, meta: unknown) {
   const result = RunRequestSchema.safeParse(args);
   if (!result.success) {
     throw new McpError(
@@ -187,8 +323,24 @@ async function handleRunScript(args: Record<string, unknown>) {
     );
   }
 
+  // Extract Codex sandbox state from MCP _meta
+  const sandboxState = extractSandboxState(meta);
+
+  // Apply Codex ceiling to requested permissions
+  const { granted, dropped } = applyCodexCeiling(
+    result.data.permissions ?? {},
+    sandboxState,
+  );
+
+  // Compute code hash for trust tracking
+  let codeHash: string | null = null;
+  if (result.data.mode === "eval" && result.data.code) {
+    codeHash = await sha256Hex(result.data.code);
+  }
+
+  // Approval (truth table)
   if (
-    !await elicitScriptApproval(result.data.mode, result.data.permissions ?? {})
+    !await elicitScriptApproval(result.data.mode, granted, dropped, codeHash)
   ) {
     return {
       content: [{
@@ -201,7 +353,20 @@ async function handleRunScript(args: Record<string, unknown>) {
     };
   }
 
-  const record = await executeRun(result.data);
+  // Save approval for future silent runs (only if we have a hash)
+  if (codeHash) {
+    try {
+      await saveScriptApproval({
+        codeHash,
+        approvedAt: new Date().toISOString(),
+        permissions: granted,
+      });
+    } catch { /* best-effort */ }
+  }
+
+  // Execute with ceiling-granted permissions
+  const modifiedRequest = { ...result.data, permissions: granted };
+  const record = await executeRun(modifiedRequest);
   await saveRun(record);
   return { content: [{ type: "text", text: JSON.stringify(record, null, 2) }] };
 }
@@ -236,7 +401,7 @@ async function handleListRuns(args?: Record<string, unknown>) {
   };
 }
 
-async function handleRunSkill(args: Record<string, unknown>) {
+async function handleRunSkill(args: Record<string, unknown>, meta: unknown) {
   const parsed = RunSkillInputSchema.safeParse(args);
   if (!parsed.success) {
     throw new McpError(
@@ -401,9 +566,89 @@ async function handleRunSkill(args: Record<string, unknown>) {
     }
   }
 
-  // Approved — execute
+  // Approved — apply Codex ceiling and execute
+  const sandboxState = extractSandboxState(meta);
+
+  // Compute effective permissions (manifest ∩ override, same as executeSkillRun does)
+  let effectivePerms: Record<string, string[] | undefined> = {};
+  const manifestResult = await loadSkillManifest(skill_path);
+  if (manifestResult.ok) {
+    const manifest = manifestResult.manifest;
+    const override = permissions ?? {};
+    for (const key of ["read", "write", "net", "env"] as const) {
+      const base = manifest.permissions[key] ?? [];
+      const over = override[key] ?? [];
+      if (over.length > 0) {
+        const shrunk = base.filter((p) => over.includes(p));
+        if (shrunk.length > 0) effectivePerms[key] = shrunk;
+      } else if (base.length > 0) {
+        effectivePerms[key] = base;
+      }
+    }
+  }
+
+  // Apply ceiling on top of effective permissions
+  const { granted: ceilingGranted, dropped: ceilingDropped } =
+    applyCodexCeiling(
+      effectivePerms,
+      sandboxState,
+    );
+
+  // If ceiling dropped permissions, elicit
+  if (!isWithinCodexCeiling(ceilingDropped)) {
+    const parts: string[] = [];
+    if (ceilingDropped.read?.length) {
+      parts.push(
+        `Read paths outside Codex sandbox:\n${
+          permsDesc({ read: ceilingDropped.read })
+        }`,
+      );
+    }
+    if (ceilingDropped.net?.length) {
+      parts.push(
+        `Network targets outside Codex sandbox:\n${
+          permsDesc({ net: ceilingDropped.net })
+        }`,
+      );
+    }
+    if (ceilingDropped.write?.length) {
+      parts.push(
+        `Write paths DENIED (write cannot exceed Codex sandbox):\n${
+          permsDesc({ write: ceilingDropped.write })
+        }`,
+      );
+    }
+
+    if (parts.length > 0) {
+      const msg = `Skill "${skill_path}" permissions exceed Codex sandbox:\n\n${
+        parts.join("\n\n")
+      }\n\nApprove with restricted permissions?`;
+      const elicitResult = await elicitRequest(msg);
+      if (!isElicitationApproved(elicitResult)) {
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              ok: false,
+              error: "Skill execution rejected: Codex ceiling not accepted",
+            }),
+          }],
+        };
+      }
+    }
+  }
+
+  // Merge ceilingGranted as shrink override for executeSkillRun
+  const ceilingOverride: Record<string, string[]> = {};
+  for (const key of ["read", "write", "net", "env"] as const) {
+    const vals = ceilingGranted[key];
+    if (vals && vals.length > 0) ceilingOverride[key] = vals;
+  }
+
   const result = await executeSkillRun(skill_path, input ?? {}, {
-    permissionsOverride: permissions,
+    permissionsOverride: Object.keys(ceilingOverride).length > 0
+      ? ceilingOverride
+      : permissions,
   });
 
   if (!result.record) {
@@ -572,7 +817,13 @@ export async function startHttpServer(
 ): Promise<{ port: number }> {
   const mcpServer = new Server(
     { name: "aves-mcp", version: "0.1.0" },
-    { capabilities: { tools: {}, resources: {} } },
+    {
+      capabilities: {
+        tools: {},
+        resources: {},
+        experimental: { "codex/sandbox-state-meta": {} },
+      },
+    },
   );
 
   // Make the server instance available to handlers
@@ -600,14 +851,18 @@ export async function startHttpServer(
     async (request: CallToolRequest) => {
       const { name, arguments: args } = request.params;
       switch (name) {
-        case "run_script":
-          return await handleRunScript(args ?? {});
+        case "run_script": {
+          const meta = (request.params as any)?._meta;
+          return await handleRunScript(args ?? {}, meta);
+        }
         case "replay_run":
           return await handleReplayRun(args ?? {});
         case "list_runs":
           return await handleListRuns();
-        case "run_skill":
-          return await handleRunSkill(args ?? {});
+        case "run_skill": {
+          const meta = (request.params as any)?._meta;
+          return await handleRunSkill(args ?? {}, meta);
+        }
         case "suggest_skills":
           return await handleSuggestSkills(args ?? {});
         case "promote_to_skill":
@@ -659,7 +914,13 @@ export async function startServer() {
       name: "aves-mcp",
       version: "0.1.0",
     },
-    { capabilities: { tools: {}, resources: {} } },
+    {
+      capabilities: {
+        tools: {},
+        resources: {},
+        experimental: { "codex/sandbox-state-meta": {} },
+      },
+    },
   );
 
   // Make the server instance available to handlers
@@ -685,13 +946,16 @@ export async function startServer() {
 
       switch (name) {
         case "run_script":
-          return await handleRunScript(args ?? {});
+          const meta = (request.params as any)?._meta;
+          return await handleRunScript(args ?? {}, meta);
         case "replay_run":
           return await handleReplayRun(args ?? {});
         case "list_runs":
           return await handleListRuns(args ?? {});
-        case "run_skill":
-          return await handleRunSkill(args ?? {});
+        case "run_skill": {
+          const meta = (request.params as any)?._meta;
+          return await handleRunSkill(args ?? {}, meta);
+        }
         case "suggest_skills":
           return await handleSuggestSkills(args ?? {});
         case "promote_to_skill":

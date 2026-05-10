@@ -103,3 +103,81 @@ Deno.test("executeRun - invalid request throws", async () => {
     assertStringIncludes((err as Error).message, "Invalid request");
   }
 });
+
+// ============================================================
+// Integration tests: approval and sandbox-state
+// ============================================================
+import {
+  applyCodexCeiling,
+  isReadOnly,
+  isWithinCodexCeiling,
+} from "./src/policy.ts";
+import { extractSandboxState } from "./src/sandbox-state.ts";
+
+Deno.test("integration: applyCodexCeiling with null sandbox passes all", () => {
+  const { granted, dropped } = applyCodexCeiling(
+    {
+      read: ["/tmp/test.ts"],
+      write: ["/tmp/test.ts"],
+      net: ["api.example.com"],
+    },
+    null,
+  );
+  assertEquals(granted.read, ["/tmp/test.ts"]);
+  assertEquals(granted.write, ["/tmp/test.ts"]);
+  assertEquals(granted.net, ["api.example.com"]);
+  assertEquals(dropped.read, undefined);
+  assertEquals(dropped.write, undefined);
+  assertEquals(dropped.net, undefined);
+});
+
+Deno.test("integration: isReadOnly true for read-only", () => {
+  assertEquals(isReadOnly({ read: ["/tmp"] }), true);
+});
+
+Deno.test("integration: isReadOnly false with write", () => {
+  assertEquals(isReadOnly({ read: ["/tmp"], write: ["/tmp"] }), false);
+});
+
+Deno.test("integration: isReadOnly false with only write", () => {
+  assertEquals(isReadOnly({ write: ["/tmp"] }), false);
+});
+
+Deno.test("integration: isReadOnly false with only net", () => {
+  assertEquals(isReadOnly({ net: ["example.com"] }), false);
+});
+
+Deno.test("integration: sandbox state extraction from null", () => {
+  assertEquals(extractSandboxState(null), null);
+});
+
+Deno.test("integration: sandbox state extraction from empty object", () => {
+  assertEquals(extractSandboxState({}), null);
+});
+
+Deno.test("integration: isWithinCodexCeiling empty drops", () => {
+  assertEquals(isWithinCodexCeiling({}), true);
+});
+
+Deno.test("integration: isWithinCodexCeiling with read drop", () => {
+  assertEquals(isWithinCodexCeiling({ read: ["/etc/passwd"] }), false);
+});
+
+Deno.test("integration: isWithinCodexCeiling with write drop", () => {
+  assertEquals(isWithinCodexCeiling({ write: ["/etc/hosts"] }), false);
+});
+
+Deno.test("integration: isWithinCodexCeiling with net drop", () => {
+  assertEquals(isWithinCodexCeiling({ net: ["evil.com"] }), false);
+});
+
+Deno.test("integration: isWithinCodexCeiling with empty array drops", () => {
+  assertEquals(isWithinCodexCeiling({ read: [], write: [] }), true);
+});
+
+Deno.test("integration: isWithinCodexCeiling with mixed drops", () => {
+  assertEquals(
+    isWithinCodexCeiling({ read: ["/etc/passwd"], write: ["/etc/hosts"] }),
+    false,
+  );
+});

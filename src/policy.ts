@@ -1,4 +1,11 @@
 import type { Permissions } from "./types.ts";
+import type { SandboxState } from "./sandbox-state.ts";
+import {
+  extractCodexNetworkTargets,
+  extractCodexReadablePaths,
+  extractCodexWritablePaths,
+  intersectPaths,
+} from "./sandbox-state.ts";
 
 // Permission categories that map to Deno CLI flags
 export type PermissionKey = "read" | "write" | "net" | "env";
@@ -88,4 +95,97 @@ export function resolvePermissions(
  */
 export function isForbidden(key: string): boolean {
   return (FORBIDDEN_KEYS as readonly string[]).includes(key);
+}
+
+/**
+ * Apply Codex sandbox ceiling to requested permissions.
+ *
+ * - read: intersection with Codex readable paths (can exceed ceiling)
+ * - write: intersection with Codex writable paths (CANNOT exceed ceiling)
+ * - net: intersection with Codex network targets
+ *        Bare allow-net (empty requested) is rejected
+ *        Specific domains that exceed ceiling are dropped
+ * - env: passed through (not gated by sandbox-state)
+ *
+ * Returns granted permissions and dropped paths (paths that were
+ * requested but not in the Codex ceiling).
+ */
+export function applyCodexCeiling(
+  requested: Permissions,
+  sandboxState: SandboxState | null,
+): { granted: Permissions; dropped: Partial<Permissions> } {
+  const granted: Permissions = {};
+  const dropped: Partial<Permissions> = {};
+
+  const readablePaths = sandboxState
+    ? extractCodexReadablePaths(sandboxState)
+    : ["*"];
+  const writablePaths = sandboxState
+    ? extractCodexWritablePaths(sandboxState)
+    : ["*"];
+  const networkTargets = sandboxState
+    ? extractCodexNetworkTargets(sandboxState)
+    : ["*"];
+
+  // Read: intersect; excess is dropped but allowed (read is safe)
+  if (requested.read && requested.read.length > 0) {
+    const { matched, dropped: readDropped } = intersectPaths(
+      requested.read,
+      readablePaths,
+    );
+    if (matched.length > 0) granted.read = matched;
+    if (readDropped.length > 0) dropped.read = readDropped;
+  }
+
+  // Write: intersect; excess is DENIED (write cannot exceed ceiling)
+  if (requested.write && requested.write.length > 0) {
+    const { matched, dropped: writeDropped } = intersectPaths(
+      requested.write,
+      writablePaths,
+    );
+    if (matched.length > 0) granted.write = matched;
+    if (writeDropped.length > 0) dropped.write = writeDropped;
+  }
+
+  // Net: intersect; bare allow-net is rejected via empty intersection
+  if (requested.net && requested.net.length > 0) {
+    const { matched, dropped: netDropped } = intersectPaths(
+      requested.net,
+      networkTargets,
+    );
+    if (matched.length > 0) granted.net = matched;
+    if (netDropped.length > 0) dropped.net = netDropped;
+  }
+
+  // Env: pass through (not gated by sandbox-state, but policy may restrict it)
+  if (requested.env && requested.env.length > 0) {
+    granted.env = requested.env;
+  }
+
+  return { granted, dropped };
+}
+
+/**
+ * Returns true when all requested permissions are within the Codex ceiling
+ * (i.e., no paths were dropped by applyCodexCeiling).
+ * This corresponds to the "C" dimension in the approval truth table.
+ */
+export function isWithinCodexCeiling(
+  dropped: Partial<Permissions>,
+): boolean {
+  const allKeys = ["read", "write", "net"] as const;
+  return allKeys.every((k) => !dropped[k] || dropped[k]!.length === 0);
+}
+
+/**
+ * Returns true when the permissions only contain read access
+ * (no write, net, or env).
+ */
+export function isReadOnly(permissions: Permissions): boolean {
+  return (
+    (permissions.read?.length ?? 0) > 0 &&
+    (permissions.write?.length ?? 0) === 0 &&
+    (permissions.net?.length ?? 0) === 0 &&
+    (permissions.env?.length ?? 0) === 0
+  );
 }

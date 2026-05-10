@@ -25,10 +25,16 @@ export function resolvePath(raw: string): string {
 
 export interface AvesConfig {
   skillRoots: string[];
+  execution: {
+    autoApproveReadonly: boolean;
+  };
 }
 
 const DEFAULT_CONFIG: AvesConfig = {
   skillRoots: [],
+  execution: {
+    autoApproveReadonly: false,
+  },
 };
 
 let _parsedConfig: AvesConfig | null = null;
@@ -57,12 +63,31 @@ export async function parseConfig(): Promise<AvesConfig> {
       }
     }
 
-    _parsedConfig = { ...DEFAULT_CONFIG, skillRoots };
+    const executionRaw = parsed.execution as
+      | Record<string, unknown>
+      | undefined;
+    const autoApproveReadonly =
+      typeof executionRaw?.auto_approve_readonly === "boolean"
+        ? executionRaw.auto_approve_readonly
+        : false;
+
+    _parsedConfig = {
+      ...DEFAULT_CONFIG,
+      skillRoots,
+      execution: { autoApproveReadonly },
+    };
     return _parsedConfig;
   } catch {
     _parsedConfig = { ...DEFAULT_CONFIG };
     return _parsedConfig;
   }
+}
+
+/**
+ * Get the current (possibly cached) parsed config.
+ */
+export async function getConfig(): Promise<AvesConfig> {
+  return _parsedConfig ?? (await parseConfig());
 }
 
 /**

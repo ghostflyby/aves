@@ -27,3 +27,11 @@ export const RUNS_TABLE_DDL = `CREATE TABLE IF NOT EXISTS runs
     input_schema_json   TEXT,             -- JSON (JSON Schema)
     code                TEXT              -- TypeScript source
 )`;
+
+export const SCRIPT_APPROVALS_TABLE_DDL =
+  `CREATE TABLE IF NOT EXISTS script_approvals
+(
+    code_hash        TEXT PRIMARY KEY, -- SHA-256 hex of code
+    approved_at      TEXT NOT NULL,    -- ISO 8601 timestamp
+    permissions_json TEXT NOT NULL     -- JSON {read?: string[], write?: string[], net?: string[], env?: string[]}
+)`;
