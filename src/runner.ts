@@ -130,6 +130,15 @@ function isDefaultAllowed(
 // Ceiling check
 // ============================================================
 
+/** Match a path against an allow-list prefix, handling macOS /var -> /private/var symlink. */
+function pathMatches(allowed: string, requested: string): boolean {
+  if (requested.startsWith(allowed)) return true;
+  // macOS /var is symlinked to /private/var
+  const normReq = requested.replace(/^\/private/, "");
+  const normAllowed = allowed.replace(/^\/private/, "");
+  return normReq.startsWith(normAllowed) || allowed.startsWith(normReq);
+}
+
 function checkCeiling(
   req: { permission: string; value: string },
   ceiling: SandboxState,
@@ -138,12 +147,12 @@ function checkCeiling(
     case "read": {
       const readable = extractCodexReadablePaths(ceiling);
       if (readable.includes("*")) return "allow";
-      return readable.some((p) => req.value.startsWith(p)) ? "allow" : "deny";
+      return readable.some((p) => pathMatches(p, req.value)) ? "allow" : "deny";
     }
     case "write": {
       const writable = extractCodexWritablePaths(ceiling);
       if (writable.includes("*")) return "allow";
-      return writable.some((p) => req.value.startsWith(p)) ? "allow" : "deny";
+      return writable.some((p) => pathMatches(p, req.value)) ? "allow" : "deny";
     }
     case "net": {
       const netTargets = extractCodexNetworkTargets(ceiling);

@@ -87,6 +87,9 @@ export default async function main(_input: unknown) {
 });
 
 Deno.test("run-store - save and load", async () => {
+  const prevData = Deno.env.get("AVES_DATA_DIR");
+  Deno.env.set("AVES_DATA_DIR", "/tmp/aves-test-runstore");
+  await Deno.mkdir("/tmp/aves-test-runstore", { recursive: true });
   const record: RunRecord = {
     run_id: "test-run-001",
     mode: "eval",
@@ -110,11 +113,28 @@ Deno.test("run-store - save and load", async () => {
   } catch {
     // ignore
   }
+  try {
+    await Deno.remove("/tmp/aves-test-runstore", { recursive: true });
+  } catch {
+    _; /* skip */
+  }
+  if (prevData) Deno.env.set("AVES_DATA_DIR", prevData);
+  else Deno.env.delete("AVES_DATA_DIR");
 });
 
 Deno.test("run-store - list runs", async () => {
+  const prevData = Deno.env.get("AVES_DATA_DIR");
+  Deno.env.set("AVES_DATA_DIR", "/tmp/aves-test-runstore2");
+  await Deno.mkdir("/tmp/aves-test-runstore2", { recursive: true });
   const runs = await listRuns();
   assertExists(Array.isArray(runs));
+  try {
+    await Deno.remove("/tmp/aves-test-runstore2", { recursive: true });
+  } catch {
+    _; /* skip */
+  }
+  if (prevData) Deno.env.set("AVES_DATA_DIR", prevData);
+  else Deno.env.delete("AVES_DATA_DIR");
 });
 
 Deno.test("executeRun - invalid request throws", async () => {
