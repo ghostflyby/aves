@@ -140,11 +140,22 @@ function resolveSandboxPath(
       }
       return [...workspaces];
     }
-    case "slash_tmp":
-      return ["/tmp"];
+    case "slash_tmp": {
+      const paths = ["/tmp"];
+      try {
+        const rp = Deno.realPathSync("/tmp");
+        if (rp !== "/tmp") paths.push(rp);
+      } catch { /* best-effort */ }
+      return paths;
+    }
     case "tmpdir": {
       const tmp = Deno.env.get("TMPDIR") ?? "/tmp";
-      return [tmp];
+      const paths = [tmp];
+      try {
+        const rp = Deno.realPathSync(tmp);
+        if (rp !== tmp) paths.push(rp);
+      } catch { /* best-effort */ }
+      return paths;
     }
   }
 }
