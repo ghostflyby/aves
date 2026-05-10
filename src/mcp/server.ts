@@ -376,7 +376,7 @@ async function handleRunScript(args: Record<string, unknown>, meta: unknown) {
 
   // Execute with ceiling-granted permissions
   const modifiedRequest = { ...result.data, permissions: granted };
-  const record = await executeRun(modifiedRequest);
+  const record = await executeRun(modifiedRequest, undefined, sandboxState);
   await saveRun(record);
   return { content: [{ type: "text", text: JSON.stringify(record, null, 2) }] };
 }
