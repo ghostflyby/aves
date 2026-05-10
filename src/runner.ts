@@ -96,9 +96,9 @@ function resolveTempDirs(): string[] {
   return dirs;
 }
 
-async function isDefaultAllowed(
+function isDefaultAllowed(
   req: { permission: string; value: string },
-): Promise<boolean> {
+): boolean {
   switch (req.permission) {
     case "sys":
       return DEFAULT_ALLOWED_SYS.has(req.value);
@@ -167,7 +167,7 @@ function createRunBrokerPolicy(
       if (cached !== undefined) return cached ? "allow" : { deny: "cached" };
 
       // Always allow safe defaults (no ceiling or trust needed)
-      if (await isDefaultAllowed(req)) return "allow";
+      if (isDefaultAllowed(req)) return "allow";
       if (
         (req.permission === "read" || req.permission === "write") &&
         extraDirs.some((d) => req.value.startsWith(d + "/"))
@@ -216,6 +216,9 @@ function createRunBrokerPolicy(
         // null → fall through to elicit for non-read
       }
       if (req.permission === "read") return "allow";
+      // When running outside of skill context (no permission module),
+      // allow everything — no user to elicit from
+      if (!skillDir) return "allow";
       return "elicit";
     },
 
