@@ -206,6 +206,9 @@ function createRunBrokerPolicy(
 
       // Check Codex ceiling
       if (codexCeiling) {
+        console.error(
+          extractCodexWritablePaths(codexCeiling).slice(0, 5),
+        );
         const ceilingResult = checkCeiling(resolvedReq, codexCeiling);
         if (ceilingResult === "deny") {
           return { deny: "outside Codex sandbox" };
@@ -213,6 +216,9 @@ function createRunBrokerPolicy(
         if (ceilingResult === "allow") {
           // Unrestricted ceiling — no need to check further
           if (codexCeiling) {
+            console.error(
+              extractCodexWritablePaths(codexCeiling).slice(0, 5),
+            );
             const readable = extractCodexReadablePaths(codexCeiling);
             const writable = extractCodexWritablePaths(codexCeiling);
             const netTargets = extractCodexNetworkTargets(codexCeiling);
