@@ -155,6 +155,31 @@ export async function loadScriptApproval(
   );
 }
 
+// ============================================================
+// Permission approvals (skill permission module trust)
+// ============================================================
+
+export interface PermissionApproval {
+  skillDir: string;
+  permissionHash: string;
+  approvedAt: string;
+}
+
+export async function savePermissionApproval(
+  approval: PermissionApproval,
+): Promise<void> {
+  await callWorker("savePermissionApproval", approval);
+}
+
+export async function loadPermissionApproval(
+  skillDir: string,
+): Promise<PermissionApproval | null> {
+  return await callWorker<PermissionApproval | null>(
+    "loadPermissionApproval",
+    skillDir,
+  );
+}
+
 export async function removeScriptApproval(codeHash: string): Promise<void> {
   await callWorker("removeScriptApproval", codeHash);
 }

@@ -5,7 +5,11 @@
 
 import { DatabaseSync } from "node:sqlite";
 import { getAvesDbPath } from "./paths.ts";
-import { RUNS_TABLE_DDL, SCRIPT_APPROVALS_TABLE_DDL } from "./db-schema.ts";
+import {
+  PERMISSION_APPROVALS_TABLE_DDL,
+  RUNS_TABLE_DDL,
+  SCRIPT_APPROVALS_TABLE_DDL,
+} from "./db-schema.ts";
 
 // ============================================================
 // Database initialization
@@ -19,6 +23,11 @@ try {
   db.exec(SCRIPT_APPROVALS_TABLE_DDL);
 } catch {
   // DB may be read-only (e.g., test environment)
+}
+try {
+  db.exec(PERMISSION_APPROVALS_TABLE_DDL);
+} catch {
+  // DB may be read-only
 }
 
 // Migrate: add new columns if missing
@@ -286,6 +295,27 @@ VALUES (?, ?, ?, ?,
         string,
         string[]
       >,
+    };
+  },
+
+  savePermissionApproval(...approvalArr: unknown[]) {
+    const a = approvalArr[0] as Record<string, string>;
+    db.prepare(
+      "INSERT OR REPLACE INTO permission_approvals (skill_dir, permission_hash, approved_at) VALUES (?, ?, ?)",
+    ).run(a.skillDir, a.permissionHash, a.approvedAt);
+    return null;
+  },
+
+  loadPermissionApproval(...skillDirArr: unknown[]) {
+    const skillDir = skillDirArr[0] as string;
+    const row = db.prepare(
+      "SELECT permission_hash, approved_at FROM permission_approvals WHERE skill_dir = ?",
+    ).get(skillDir) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return {
+      skillDir,
+      permissionHash: row.permission_hash as string,
+      approvedAt: row.approved_at as string,
     };
   },
 

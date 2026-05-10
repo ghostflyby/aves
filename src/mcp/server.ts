@@ -46,7 +46,12 @@ import {
   isWithinCodexCeiling,
 } from "../policy.ts";
 import { getConfig } from "../config.ts";
-import { loadScriptApproval, saveScriptApproval } from "../run-store.ts";
+import {
+  loadPermissionApproval,
+  loadScriptApproval,
+  savePermissionApproval,
+  saveScriptApproval,
+} from "../run-store.ts";
 
 // ============================================================
 // Tool definitions — inputSchema generated from Zod (single source of truth)
@@ -428,6 +433,56 @@ async function handleRunSkill(args: Record<string, unknown>, meta: unknown) {
     );
   }
 
+  // Check permission module existence and approval
+  let permApproved = false;
+  try {
+    await Deno.stat(`${skill_path}/mod.permission.ts`);
+    // Permission module exists — check if approved
+    const permContent = await Deno.readTextFile(
+      `${skill_path}/mod.permission.ts`,
+    );
+    const permHash = await sha256Hex(permContent);
+    const prev = await loadPermissionApproval(skill_path);
+    if (prev && prev.permissionHash === permHash) {
+      permApproved = true;
+    } else if (prev && prev.permissionHash !== permHash) {
+      // Hash changed — need re-approval
+      const msg =
+        `Permission module for skill "${skill_path}" has changed. Review:
+
+` +
+        "```ts\n" + permContent + "\n```" +
+        "\n\nApprove and save?";
+      const result = await elicitRequest(msg);
+      if (isElicitationApproved(result)) {
+        await savePermissionApproval({
+          skillDir: skill_path,
+          permissionHash: permHash,
+          approvedAt: new Date().toISOString(),
+        });
+        permApproved = true;
+      }
+    } else {
+      // First time — elicit approval
+      const msg = `Permission module found for skill "${skill_path}". Review:
+
+` +
+        "```ts\n" + permContent + "\n```" +
+        "\n\nApprove and save?";
+      const result = await elicitRequest(msg);
+      if (isElicitationApproved(result)) {
+        await savePermissionApproval({
+          skillDir: skill_path,
+          permissionHash: permHash,
+          approvedAt: new Date().toISOString(),
+        });
+        permApproved = true;
+      }
+    }
+  } catch {
+    // No permission module — no additional approval needed
+  }
+
   // Extract Codex sandbox state
   const sandboxState = extractSandboxState(meta);
 
@@ -440,13 +495,18 @@ async function handleRunSkill(args: Record<string, unknown>, meta: unknown) {
     sandboxState,
   );
 
-  // Approval via hash-based trust (same pattern as handleRunScript)
-  const trusted = await elicitScriptApproval(
-    "skill",
-    granted,
-    dropped,
-    codeHash,
-  );
+  // Approval: if perm module approved and all within ceiling, skip elicitation
+  let trusted: boolean;
+  if (permApproved && isWithinCodexCeiling(dropped)) {
+    trusted = true;
+  } else {
+    trusted = await elicitScriptApproval(
+      "skill",
+      granted,
+      dropped,
+      codeHash,
+    );
+  }
   if (!trusted) {
     return {
       content: [{

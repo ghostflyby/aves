@@ -35,3 +35,11 @@ export const SCRIPT_APPROVALS_TABLE_DDL =
     approved_at      TEXT NOT NULL,    -- ISO 8601 timestamp
     permissions_json TEXT NOT NULL     -- JSON {read?: string[], write?: string[], net?: string[], env?: string[]}
 )`;
+
+export const PERMISSION_APPROVALS_TABLE_DDL =
+  `CREATE TABLE IF NOT EXISTS permission_approvals
+(
+    skill_dir        TEXT PRIMARY KEY,
+    permission_hash  TEXT NOT NULL,
+    approved_at      TEXT NOT NULL
+  )`;

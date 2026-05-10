@@ -248,6 +248,20 @@ export default async function main(input: unknown) {
 `;
   await Deno.writeTextFile(`${skillDir}/mod.ts`, entrypointContent.trimStart());
 
+  // Write permission module template (optional — user edits to enable fine-grained permissions)
+  const permTemplate = `// Permission module for ${name}
+// Return "allow", "deny", or undefined (let broker decide).
+// Remove this file if not needed.
+export default {
+  read(path: string) {},
+  write(path: string) {},
+  net(host: string) {},
+  env(name: string) {},
+  sys(name: string) {},
+};
+`;
+  await Deno.writeTextFile(`${skillDir}/mod.permission.ts`, permTemplate);
+
   // examples.json and test.ts are NOT auto-generated for safety.
   // The run's raw_input/output may contain sensitive data.
   warnings.push(

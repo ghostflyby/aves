@@ -10,6 +10,7 @@ import {
   extractCodexWritablePaths,
 } from "./sandbox-state.ts";
 import { loadScriptApproval } from "./run-store.ts";
+import { loadPermissionModule } from "./permission-loader.ts";
 
 const BOOT_PATH = new URL("./boot.ts", import.meta.url).pathname;
 
@@ -105,9 +106,7 @@ async function isDefaultAllowed(
       return DEFAULT_ALLOWED_ENV.has(req.value);
     case "read":
     case "write":
-      return (await resolveTempDirs()).some((d) =>
-        req.value.startsWith(d + "/")
-      );
+      return resolveTempDirs().some((d) => req.value.startsWith(d + "/"));
     case "net": {
       return DEFAULT_IMPORT_DOMAINS.some(
         (d) => req.value === d || req.value.startsWith(d.split(":")[0]),
@@ -154,8 +153,12 @@ function createRunBrokerPolicy(
   codexCeiling: SandboxState | null,
   codeHash: string | null,
   extraDirs: string[],
+  skillDir?: string,
 ): BrokerPolicy {
   const cache = new Map<number, boolean>();
+
+  // Load permission module at policy creation time (if skillDir provided)
+  const permModule = skillDir ? loadPermissionModule(skillDir) : null;
 
   return {
     async decide(req) {
@@ -169,6 +172,16 @@ function createRunBrokerPolicy(
         (req.permission === "read" || req.permission === "write") &&
         extraDirs.some((d) => req.value.startsWith(d + "/"))
       ) return "allow";
+
+      // Check permission module for fine-grained rules (before ceiling)
+      if (permModule) {
+        const permResult = await permModule.decide(req.permission, req.value);
+        if (permResult === "deny") {
+          return { deny: "denied by skill permission module" };
+        }
+        if (permResult === "allow") return "allow";
+        // null → fall through to ceiling / hash trust / elicit
+      }
 
       // Check Codex ceiling
       if (codexCeiling) {
@@ -193,8 +206,17 @@ function createRunBrokerPolicy(
         }
       }
 
-      // No ceiling info — elicit everything else
-      return "allow";
+      // No ceiling info — check permission module for non-read, otherwise allow reads
+      if (permModule) {
+        const permResult = await permModule.decide(req.permission, req.value);
+        if (permResult === "deny") {
+          return { deny: "denied by skill permission module" };
+        }
+        if (permResult === "allow") return "allow";
+        // null → fall through to elicit for non-read
+      }
+      if (req.permission === "read") return "allow";
+      return "elicit";
     },
 
     onElicitResolved(id, allowed) {
@@ -217,6 +239,7 @@ async function runModuleInSandbox(
   mode: RunRecord["mode"],
   codeHash?: string | null,
   codexCeiling?: SandboxState | null,
+  skillDir?: string,
 ): Promise<RunRecord> {
   const runDir = await Deno.makeTempDir({
     prefix: "aves_",
@@ -237,7 +260,7 @@ async function runModuleInSandbox(
   const policy = createRunBrokerPolicy(codexCeiling ?? null, codeHash ?? null, [
     realRunDir,
     realModulePath.substring(0, realModulePath.lastIndexOf("/")),
-  ]);
+  ], skillDir);
   let brokerPath = "";
 
   try {
@@ -465,6 +488,9 @@ export async function executeSkillRun(
     effectivePerms,
     denied,
     "skill",
+    undefined,
+    undefined,
+    skillDir,
   );
 
   record.skill_path = skillDir;
