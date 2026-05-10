@@ -257,7 +257,7 @@ export default {
   write(path: string): boolean | undefined {},
   net(host: string): boolean | undefined {},
   env(name: string): boolean | undefined {},
-  sys(name: string): boolean | undefined {},
+  sys(name: "hostname" | "osRelease" | "osUptime" | "loadavg" | "networkInterfaces" | "systemMemoryInfo" | "gid" | "uid"): boolean | undefined {},
 };
 `;
   await Deno.writeTextFile(`${skillDir}/mod.permission.ts`, permTemplate);
