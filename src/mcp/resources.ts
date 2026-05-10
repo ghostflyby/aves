@@ -1,35 +1,49 @@
-// Aves MCP resources — static metadata and parameterized lookups.
-// Extracted from server.ts to keep the server module focused on tool handling.
+// Aves MCP resources — static metadata, dynamic examples, and parameterized lookups.
 
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { RUNS_TABLE_DDL } from "../db-schema.ts";
 import { loadRun } from "../run-store.ts";
 import { listSkills } from "../skill.ts";
 
-import csvToJson from "./examples/csv-to-json.md" with { type: "text" };
-import hash from "./examples/hash.md" with { type: "text" };
-import jsonSchema from "./examples/json-schema.md" with { type: "text" };
-import regex from "./examples/regex.md" with { type: "text" };
-import stats from "./examples/stats.md" with { type: "text" };
+// ============================================================
+// Examples — dynamically discovered from ./examples/*.md
+// ============================================================
 
-const EXAMPLE_RESOURCES: Record<string, string> = {
-  "aves://examples/csv-to-json": csvToJson,
-  "aves://examples/hash": hash,
-  "aves://examples/json-schema": jsonSchema,
-  "aves://examples/regex": regex,
-  "aves://examples/stats": stats,
-};
+const EXAMPLES_DIR = new URL("./examples/", import.meta.url);
 
-const EXAMPLE_URIS = [
-  "aves://examples/csv-to-json",
-  "aves://examples/hash",
-  "aves://examples/json-schema",
-  "aves://examples/regex",
-  "aves://examples/stats",
-];
+async function listExampleNames(): Promise<string[]> {
+  const names: string[] = [];
+  try {
+    for await (const entry of Deno.readDir(EXAMPLES_DIR)) {
+      if (entry.isFile && entry.name.endsWith(".md")) {
+        names.push(entry.name.replace(/\.md$/, ""));
+      }
+    }
+  } catch {
+    // examples dir doesn't exist or is unreadable
+  }
+  names.sort();
+  return names;
+}
+
+async function readExample(name: string): Promise<string | null> {
+  try {
+    return await Deno.readTextFile(
+      new URL(`./${name}.md`, EXAMPLES_DIR),
+    );
+  } catch {
+    return null;
+  }
+}
+
+// ============================================================
+// Handlers
+// ============================================================
 
 export const handleListResources = async () => {
   const skills = await listSkills();
+  const exampleNames = await listExampleNames();
+
   return {
     resources: [
       {
@@ -46,10 +60,10 @@ export const handleListResources = async () => {
           "List of all installed skills with names, paths, and descriptions",
         mimeType: "application/json",
       },
-      ...EXAMPLE_URIS.map((uri) => ({
-        uri,
-        name: uri.replace("aves://examples/", ""),
-        description: `Example script: ${uri.replace("aves://examples/", "")}`,
+      ...exampleNames.map((name) => ({
+        uri: `aves://examples/${name}`,
+        name,
+        description: `Example script: ${name}`,
         mimeType: "text/markdown",
       })),
       ...skills.map((s) => ({
@@ -104,11 +118,19 @@ export async function handleReadResource(uri: string): Promise<{
     };
   }
 
-  const exampleContent = EXAMPLE_RESOURCES[uri];
-  if (exampleContent) {
-    return {
-      contents: [{ uri, mimeType: "text/markdown", text: exampleContent }],
-    };
+  // Dynamic example lookup
+  const exampleMatch = uri.match(/^aves:\/\/examples\/(.+)$/);
+  if (exampleMatch) {
+    const content = await readExample(exampleMatch[1]);
+    if (content) {
+      return {
+        contents: [{ uri, mimeType: "text/markdown", text: content }],
+      };
+    }
+    throw new McpError(
+      ErrorCode.InvalidParams,
+      `Example not found: ${exampleMatch[1]}`,
+    );
   }
 
   const skillMatch = uri.match(/^aves:\/\/skills\/(.+)$/);
@@ -122,7 +144,6 @@ export async function handleReadResource(uri: string): Promise<{
         `Skill not found: ${skillName}`,
       );
     }
-    // Read and return SKILL.md content
     try {
       const mdContent = await Deno.readTextFile(`${skill.path}/SKILL.md`);
       return {
