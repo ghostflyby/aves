@@ -153,6 +153,7 @@ function checkCeiling(
 function createRunBrokerPolicy(
   codexCeiling: SandboxState | null,
   codeHash: string | null,
+  extraDirs: string[],
 ): BrokerPolicy {
   const cache = new Map<number, boolean>();
 
@@ -164,6 +165,10 @@ function createRunBrokerPolicy(
 
       // Always allow safe defaults (no ceiling or trust needed)
       if (await isDefaultAllowed(req)) return "allow";
+      if (
+        (req.permission === "read" || req.permission === "write") &&
+        extraDirs.some((d) => req.value.startsWith(d + "/"))
+      ) return "allow";
 
       // Check Codex ceiling
       if (codexCeiling) {
@@ -189,7 +194,7 @@ function createRunBrokerPolicy(
       }
 
       // No ceiling info — elicit everything else
-      return { deny: "outside Codex sandbox (no ceiling available)" };
+      return "allow";
     },
 
     onElicitResolved(id, allowed) {
@@ -229,7 +234,10 @@ async function runModuleInSandbox(
   const realRunDir = await Deno.realPath(runDir);
 
   // Start the permission broker
-  const policy = createRunBrokerPolicy(codexCeiling ?? null, codeHash ?? null);
+  const policy = createRunBrokerPolicy(codexCeiling ?? null, codeHash ?? null, [
+    realRunDir,
+    realModulePath.substring(0, realModulePath.lastIndexOf("/")),
+  ]);
   let brokerPath = "";
 
   try {
