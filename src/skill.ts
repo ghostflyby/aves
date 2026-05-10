@@ -1,145 +1,45 @@
-import { SkillManifestSchema } from "./schemas.ts";
-import type { RunRecord, SkillManifest } from "./types.ts";
 import { resolvePermissions } from "./policy.ts";
-import { loadSkillApproval, saveRun, saveSkillApproval } from "./run-store.ts";
 import {
   ensureSkillRoots,
   getSkillRoots,
   getWritableSkillRoot,
 } from "./config.ts";
+import { saveRun } from "./run-store.ts";
+import type { RunRecord, SkillManifest } from "./schemas.ts";
+import { SkillManifestSchema } from "./schemas.ts";
 
 // ============================================================
-// Manifest helpers
+// Skill manifest loading
 // ============================================================
 
-/**
- * Validate a skill manifest against the schema.
- */
-export function validateManifest(
-  data: unknown,
-): { ok: true; manifest: SkillManifest } | { ok: false; error: string } {
-  const result = SkillManifestSchema.safeParse(data);
-  if (!result.success) {
+export type LoadManifestResult =
+  | { ok: true; manifest: SkillManifest }
+  | { ok: false; error: string };
+
+function validateManifest(raw: unknown): LoadManifestResult {
+  const parsed = SkillManifestSchema.safeParse(raw);
+  if (!parsed.success) {
     return {
       ok: false,
-      error: `Invalid skill manifest: ${
-        result.error.issues
-          .map((i) => `${i.path.join(".")}: ${i.message}`)
-          .join("; ")
-      }`,
+      error: parsed.error.issues
+        .map((i) => `${i.path.join(".")}: ${i.message}`)
+        .join("; "),
     };
   }
-  return { ok: true, manifest: result.data };
-}
-
-async function sha256Hex(data: string | Uint8Array): Promise<string> {
-  const bytes = typeof data === "string"
-    ? new TextEncoder().encode(data)
-    : data;
-  const buffer = new ArrayBuffer(bytes.byteLength);
-  new Uint8Array(buffer).set(bytes);
-  const hash = await crypto.subtle.digest("SHA-256", buffer);
-  return Array.from(new Uint8Array(hash))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-const GENERATED_SKILL_FILES = new Set([
-  "SKILL.md",
-  "skill.json",
-  "examples.json",
-  "test.ts",
-]);
-
-const GENERATED_SKILL_DIRS = new Set([
-  "node_modules",
-  "dist",
-  "build",
-  "coverage",
-]);
-
-function shouldHashSkillEntry(relativePath: string, name: string): boolean {
-  if (name.startsWith(".")) return false;
-  return !GENERATED_SKILL_FILES.has(relativePath);
+  return { ok: true, manifest: parsed.data };
 }
 
 /**
- * Compute a content hash for a skill directory.
- * Hashes user-authored files recursively, excluding generated metadata.
- */
-export async function hashSkillContent(skillDir: string): Promise<string> {
-  const entries: Array<{ path: string; hash: string }> = [];
-
-  async function collect(dir: string, prefix = ""): Promise<void> {
-    for await (const entry of Deno.readDir(dir)) {
-      const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
-      if (!shouldHashSkillEntry(relativePath, entry.name)) continue;
-      if (entry.isSymlink) continue;
-
-      const path = `${dir}/${entry.name}`;
-      if (entry.isDirectory) {
-        if (GENERATED_SKILL_DIRS.has(entry.name)) continue;
-        await collect(path, relativePath);
-        continue;
-      }
-
-      if (!entry.isFile) continue;
-      const data = await Deno.readFile(path);
-      entries.push({ path: relativePath, hash: await sha256Hex(data) });
-    }
-  }
-
-  await collect(skillDir);
-  entries.sort((a, b) => a.path.localeCompare(b.path));
-  const combined = entries.map((e) => `${e.path}:${e.hash}`).join("\n");
-  return sha256Hex(combined);
-}
-
-/**
- * Compute an SHA-256 hash of the manifest using stable JSON serialization.
- */
-export async function hashManifest(manifest: SkillManifest): Promise<string> {
-  function stableStringify(val: unknown): string {
-    if (val === null) return "null";
-    if (typeof val !== "object" || Array.isArray(val)) {
-      return JSON.stringify(val);
-    }
-    const keys = Object.keys(val as Record<string, unknown>).sort();
-    const pairs = keys.map(
-      (k) =>
-        `${JSON.stringify(k)}:${
-          stableStringify(
-            (val as Record<string, unknown>)[k],
-          )
-        }`,
-    );
-    return `{${pairs.join(",")}}`;
-  }
-  const canonical = stableStringify(manifest);
-  const enc = new TextEncoder();
-  const data = enc.encode(canonical);
-  const hash = await crypto.subtle.digest("SHA-256", data);
-  return Array.from(new Uint8Array(hash))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-// ============================================================
-// Disk I/O
-// ============================================================
-
-/**
- * Load and validate a skill manifest from disk.
+ * Load and validate a skill manifest from a directory.
  */
 export async function loadSkillManifest(
   skillDir: string,
-): Promise<
-  { ok: true; manifest: SkillManifest } | { ok: false; error: string }
-> {
+): Promise<LoadManifestResult> {
   try {
-    const raw = await Deno.readTextFile(`${skillDir}/skill.json`);
-    const parsed = JSON.parse(raw);
-    return validateManifest(parsed);
+    const raw = JSON.parse(
+      await Deno.readTextFile(`${skillDir}/skill.json`),
+    );
+    return validateManifest(raw);
   } catch (err) {
     return {
       ok: false,
@@ -149,8 +49,22 @@ export async function loadSkillManifest(
 }
 
 /**
- * Resolve the entrypoint path for a skill directory.
+ * Hash a manifest for content-change detection.
  */
+export async function hashManifest(manifest: SkillManifest): Promise<string> {
+  const json = JSON.stringify(manifest);
+  const enc = new TextEncoder();
+  const data = enc.encode(json);
+  const hash = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(hash))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+// ============================================================
+// Entrypoint resolution
+// ============================================================
+
 export function resolveSkillEntrypoint(
   skillDir: string,
   manifest: SkillManifest,
@@ -162,10 +76,35 @@ export function resolveSkillEntrypoint(
 // SKILL.md generation
 // ============================================================
 
+/** Extract the zod.object({...}) expression from code, balancing parens. */
+function extractZodInputSchema(code: string): string | null {
+  const idx = code.search(/export const inputSchema\s*=\s*z\.object\(/);
+  if (idx === -1) return null;
+
+  let depth = 0;
+  let i = code.indexOf("(", idx);
+  if (i === -1) return null;
+  const start = i;
+
+  for (; i < code.length; i++) {
+    const ch = code[i];
+    if (ch === "(") depth++;
+    else if (ch === ")") {
+      depth--;
+      if (depth === 0) {
+        const expr = code.slice(start, i + 1);
+        return `export const inputSchema = ${expr}`;
+      }
+    }
+  }
+  return null;
+}
+
 function generateSkillMarkdown(
   name: string,
   description: string,
   manifest?: SkillManifest,
+  code?: string,
 ): string {
   const lines: string[] = [];
   lines.push("---");
@@ -193,8 +132,38 @@ function generateSkillMarkdown(
     "The Zod input definition is exported as `inputSchema` from `./mod.ts`.",
   );
   lines.push("");
-  lines.push("See `./examples.json` for sample input/output pairs.");
+  lines.push(
+    "Add `./examples.json` with sample input/output pairs for testing.",
+  );
   lines.push("");
+
+  // Inline Zod schema
+  lines.push("## Input Schema");
+  lines.push("");
+  if (code) {
+    const zodExpr = extractZodInputSchema(code);
+    if (zodExpr) {
+      lines.push("```ts");
+      lines.push(zodExpr);
+      lines.push("```");
+    } else {
+      lines.push("**No inputSchema defined.** Consider adding a Zod schema:");
+      lines.push("");
+      lines.push("```ts");
+      lines.push('import { z } from "zod";');
+      lines.push("");
+      lines.push("export const inputSchema = z.object({");
+      lines.push("  // add your fields here");
+      lines.push("});");
+      lines.push("```");
+    }
+  } else {
+    lines.push(
+      "**No inputSchema defined.** Consider adding one to `./mod.ts`.",
+    );
+  }
+  lines.push("");
+
   lines.push("## Notes");
   lines.push("");
   lines.push("- First run will prompt for permission approval");
@@ -264,7 +233,7 @@ export async function listSkills(): Promise<SkillInfo[]> {
 
 /**
  * Promote a run record to a skill, writing to disk.
- * Returns the skill directory path.
+ * Returns the skill directory path and any warnings.
  */
 export async function promoteRunToSkill(
   run: RunRecord,
@@ -274,7 +243,12 @@ export async function promoteRunToSkill(
     entrypointContent?: string;
     skipIfExists?: boolean;
   },
-): Promise<{ ok: true; skillDir: string } | { ok: false; error: string }> {
+): Promise<
+  { ok: true; skillDir: string; warnings: string[] } | {
+    ok: false;
+    error: string;
+  }
+> {
   if (!name.match(/^[a-z][a-z0-9_-]*$/)) {
     return {
       ok: false,
@@ -282,12 +256,12 @@ export async function promoteRunToSkill(
     };
   }
 
+  const warnings: string[] = [];
+
   if (!run.schema_hash) {
-    return {
-      ok: false,
-      error:
-        "Cannot promote: run has no schema_hash (module did not export inputSchema)",
-    };
+    warnings.push(
+      "No inputSchema: consider adding Zod schema to mod.ts and inlining it in SKILL.md",
+    );
   }
 
   const { denied } = resolvePermissions(run.granted_permissions);
@@ -318,7 +292,7 @@ export async function promoteRunToSkill(
   if (options?.skipIfExists) {
     try {
       await Deno.stat(`${skillDir}/skill.json`);
-      return { ok: true, skillDir };
+      return { ok: true, skillDir, warnings };
     } catch {
       // Doesn't exist, continue
     }
@@ -333,7 +307,7 @@ export async function promoteRunToSkill(
 
   await Deno.writeTextFile(
     `${skillDir}/SKILL.md`,
-    generateSkillMarkdown(name, description, manifest),
+    generateSkillMarkdown(name, description, manifest, run.code),
   );
 
   const entrypointContent = options?.entrypointContent ??
@@ -348,26 +322,16 @@ export default async function main(input: unknown) {
 `;
   await Deno.writeTextFile(`${skillDir}/mod.ts`, entrypointContent.trimStart());
 
-  const example = run.raw_input && run.output !== undefined
-    ? { input: run.raw_input, output: run.output }
-    : null;
-
-  if (example) {
-    await Deno.writeTextFile(
-      `${skillDir}/examples.json`,
-      JSON.stringify([example], null, 2),
-    );
-  }
-
-  if (example) {
-    const testContent = generateReplayTest(name, [example]);
-    await Deno.writeTextFile(`${skillDir}/test.ts`, testContent);
-  }
+  // examples.json and test.ts are NOT auto-generated for safety.
+  // The run's raw_input/output may contain sensitive data.
+  warnings.push(
+    "No examples/test auto-generated for safety — consider adding examples.json and test.ts manually",
+  );
 
   run.promoted_to_skill = skillDir;
   await saveRun(run);
 
-  return { ok: true, skillDir };
+  return { ok: true, skillDir, warnings };
 }
 
 // ============================================================
@@ -399,43 +363,32 @@ export async function checkSkillApproval(
   const manifest = manifestResult.manifest;
   const mHash = await hashManifest(manifest);
 
-  const existing = await loadSkillApproval(skillDir);
-
-  // No prior approval record
-  if (!existing) {
-    return {
-      status: "need_approval",
-      skillPath: skillDir,
-      manifestHash: mHash,
-    };
-  }
-
-  // Manifest (permissions) changed — re-approve
-  if (existing.manifestHash !== mHash) {
-    return {
-      status: "need_approval",
-      skillPath: skillDir,
-      manifestHash: mHash,
-    };
-  }
-
-  // Content changed — soft notification
-  const cHash = await hashSkillContent(skillDir);
-  if (existing.contentHash !== cHash) {
+  // Check if previously approved
+  try {
+    const approvedHash = await Deno.readTextFile(
+      `${skillDir}/.aves-approved`,
+    );
+    const trimmed = approvedHash.trim();
+    if (trimmed === mHash) {
+      return { status: "approved" };
+    }
     return {
       status: "content_changed",
       skillPath: skillDir,
       manifestHash: mHash,
-      contentHash: cHash,
+      contentHash: trimmed,
+    };
+  } catch {
+    return {
+      status: "need_approval",
+      skillPath: skillDir,
+      manifestHash: mHash,
     };
   }
-
-  // Everything matches
-  return { status: "approved" };
 }
 
 /**
- * Record an approval for a skill.
+ * Mark a skill as approved by writing its manifest hash.
  */
 export async function approveSkill(
   skillDir: string,
@@ -446,19 +399,15 @@ export async function approveSkill(
   }
 
   const mHash = await hashManifest(manifestResult.manifest);
-  const cHash = await hashSkillContent(skillDir);
-  await saveSkillApproval({
-    skillPath: skillDir,
-    manifestHash: mHash,
-    contentHash: cHash,
-    approvedAt: new Date().toISOString(),
-    requiresApproval: true,
-  });
-
+  await Deno.writeTextFile(`${skillDir}/.aves-approved`, mHash);
   return { ok: true };
 }
 
-function generateReplayTest(skillName: string, examples: unknown[]): string {
+// ============================================================
+// Replay test generation (public utility, not called from promote)
+// ============================================================
+
+function _generateReplayTest(skillName: string, examples: unknown[]): string {
   const lines = [
     `import { assertEquals } from "@std/assert";`,
     `import main from "./mod.ts";`,

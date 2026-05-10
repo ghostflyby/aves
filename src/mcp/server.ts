@@ -757,7 +757,28 @@ async function handlePromoteToSkill(args: Record<string, unknown>) {
     throw new McpError(ErrorCode.InvalidParams, result.error);
   }
 
-  return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  const lines = [
+    `Skill \`${name}\` created.`,
+    `Path: ${result.skillDir}`,
+    `Files: skill.json, SKILL.md, mod.ts`,
+    ``,
+  ];
+
+  if (result.warnings.length > 0) {
+    lines.push("Warnings:");
+    for (const w of result.warnings) {
+      lines.push(`- ${w}`);
+    }
+    lines.push("");
+  }
+
+  lines.push("Next steps:");
+  lines.push("- Review and edit SKILL.md");
+  lines.push("- Review permissions in skill.json");
+  lines.push("- Edit mod.ts if the entrypoint needs changes");
+  lines.push("- Add permission_justifications to skill.json for transparency");
+
+  return { content: [{ type: "text", text: lines.join("\n") }] };
 }
 
 async function handleQueryRuns(args?: Record<string, unknown>) {
