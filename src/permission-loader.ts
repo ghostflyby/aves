@@ -16,20 +16,16 @@ export function loadPermissionModule(skillDir: string): PermissionModule {
     };
   }
 
-  const worker = new Worker(
-    new URL("./permission-worker.ts", import.meta.url).href,
-    {
-      type: "module",
-      deno: {
-        permissions: {
-          read: [skillDir],
-        },
-      },
-      env: {
-        AVES_PERMISSION_MODULE: modulePath,
+  const workerUrl = new URL("./permission-worker.ts", import.meta.url);
+  workerUrl.searchParams.set("module", modulePath);
+  const worker = new Worker(workerUrl.href, {
+    type: "module",
+    deno: {
+      permissions: {
+        read: [skillDir],
       },
     },
-  );
+  });
 
   let nextId = 0;
   const pending = new Map<

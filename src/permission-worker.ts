@@ -1,6 +1,6 @@
 // Worker: loads mod.permission.ts and responds to permission queries
-const modulePath = Deno.env.get("AVES_PERMISSION_MODULE");
-if (!modulePath) throw new Error("AVES_PERMISSION_MODULE not set");
+const modulePath = new URL(import.meta.url).searchParams.get("module");
+if (!modulePath) throw new Error("module search param not set on worker URL");
 
 type PermissionFn = (value: string) => boolean | undefined;
 
