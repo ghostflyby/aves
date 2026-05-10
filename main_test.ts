@@ -3,6 +3,29 @@ import { executeRun } from "./src/runner.ts";
 import { listRuns, loadRun, saveRun } from "./src/run-store.ts";
 import type { RunRecord, RunRequest } from "./src/types.ts";
 
+import type { SandboxState } from "./src/sandbox-state.ts";
+
+const TEST_CEILING: SandboxState = {
+  meta: {
+    permissionProfile: {
+      type: "managed",
+      file_system: { type: "unrestricted", entries: [] },
+      network: "enabled",
+    },
+    sandboxPolicy: {
+      type: "workspace-write",
+      writable_roots: [],
+      network_access: true,
+      exclude_tmpdir_env_var: false,
+      exclude_slash_tmp: false,
+    },
+    codexLinuxSandboxExe: null,
+    sandboxCwd: "/Users/ghostflyby/repos/learn/aves",
+    useLegacyLandlock: false,
+  },
+  workspaces: ["/Users/ghostflyby/repos/learn/aves"],
+};
+
 Deno.test("executeRun - basic eval mode", async () => {
   const request: RunRequest = {
     mode: "eval",
@@ -16,7 +39,7 @@ export default async function main(input: { name?: string }) {
     permissions: {},
   };
 
-  const record = await executeRun(request);
+  const record = await executeRun(request, {}, TEST_CEILING);
 
   assertEquals(record.exit_code, 0);
   assertEquals(record.output, { greeting: "hello aves" });
@@ -39,7 +62,7 @@ export default async function main(input: { name?: string }) {
     permissions: {},
   };
 
-  const record = await executeRun(request);
+  const record = await executeRun(request, {}, TEST_CEILING);
 
   assertEquals(record.exit_code, 0);
   assertEquals(record.output, { greeting: "hello default" });
@@ -56,7 +79,7 @@ export default async function main(_input: unknown) {
     permissions: {},
   };
 
-  const record = await executeRun(request);
+  const record = await executeRun(request, {}, TEST_CEILING);
 
   assertEquals(record.exit_code, 1);
   assertExists(record.error);

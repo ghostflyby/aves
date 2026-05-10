@@ -190,6 +190,18 @@ function createRunBrokerPolicy(
           return { deny: "outside Codex sandbox" };
         }
         if (ceilingResult === "allow") {
+          // Unrestricted ceiling — no need to elicit
+          if (codexCeiling) {
+            const readable = extractCodexReadablePaths(codexCeiling);
+            const writable = extractCodexWritablePaths(codexCeiling);
+            const netTargets = extractCodexNetworkTargets(codexCeiling);
+            if (
+              readable.includes("*") && writable.includes("*") &&
+              netTargets.includes("*")
+            ) {
+              return "allow";
+            }
+          }
           // Within ceiling — check hash trust for auto-approval
           if (codeHash) {
             try {
@@ -216,10 +228,7 @@ function createRunBrokerPolicy(
         // null → fall through to elicit for non-read
       }
       if (req.permission === "read") return "allow";
-      // When running outside of skill context (no permission module),
-      // allow everything — no user to elicit from
-      if (!skillDir) return "allow";
-      return "elicit";
+      return { deny: "outside Codex sandbox" };
     },
 
     onElicitResolved(id, allowed) {
@@ -374,6 +383,7 @@ async function runModuleInSandbox(
 export async function executeRun(
   request: RunRequest,
   options?: { policy?: ServerPolicy },
+  codexCeiling?: SandboxState | null,
 ): Promise<RunRecord> {
   const runId = crypto.randomUUID();
   if (request.mode === "eval") {
@@ -401,6 +411,7 @@ export async function executeRun(
       denied,
       "eval",
       codeHash,
+      codexCeiling ?? null,
     );
 
     // Clean up eval dir (runModuleInSandbox cleans its own dir)
@@ -432,6 +443,8 @@ export async function executeRun(
     userPerms,
     denied,
     request.mode,
+    undefined,
+    codexCeiling ?? null,
   );
 }
 
