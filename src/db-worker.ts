@@ -49,19 +49,19 @@ function rowToRecord(row: Record<string, unknown>): Record<string, unknown> {
 
 const handlers: Record<string, (...args: unknown[]) => unknown> = {
   saveRun(...recordArr: unknown[]) {
-    const r = recordArr[0] as Record<string, unknown>;
+    const r = recordArr[0] as Record<string, string | number | null>;
     db.prepare(`INSERT OR REPLACE INTO runs
       (run_id, mode, code_hash, exit_code,
        started_at, finished_at, duration_ms, code)
       VALUES (?,?,?,?, ?,?,?,?)`).run(
-      r.run_id,
-      r.mode,
-      r.code_hash ?? null,
-      r.exit_code,
-      r.started_at,
-      r.finished_at,
-      r.duration_ms,
-      r.code ?? null,
+      r.run_id as string,
+      r.mode as string,
+      r.code_hash as string | null ?? null,
+      r.exit_code as number,
+      r.started_at as string,
+      r.finished_at as string,
+      r.duration_ms as number,
+      r.code as string | null ?? null,
     );
     return null;
   },
