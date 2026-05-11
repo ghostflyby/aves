@@ -4,6 +4,8 @@ import {
   type CallToolRequest,
   CallToolRequestSchema,
   ErrorCode,
+  GetPromptRequestSchema,
+  ListPromptsRequestSchema,
   ListResourcesRequestSchema,
   ListResourceTemplatesRequestSchema,
   ListToolsRequestSchema,
@@ -20,6 +22,11 @@ import {
   handleListResourceTemplates,
   handleReadResource,
 } from "./resources.ts";
+import {
+  AVES_PROMPT_DESCRIPTION,
+  AVES_PROMPT_NAME,
+  buildAvesPrompt,
+} from "./prompt-handlers.ts";
 import { RUNS_TABLE_DDL } from "../db-schema.ts";
 import { listSkills, promoteRunToSkill } from "../skill.ts";
 import {
@@ -566,6 +573,32 @@ export async function startHttpServer(
     },
   );
 
+  mcpServer.setRequestHandler(ListPromptsRequestSchema, () => ({
+    prompts: [{
+      name: AVES_PROMPT_NAME,
+      description: AVES_PROMPT_DESCRIPTION,
+      arguments: [],
+    }],
+  }));
+
+  mcpServer.setRequestHandler(
+    GetPromptRequestSchema,
+    async (req: { params: { name: string } }) => {
+      if (req.params.name === AVES_PROMPT_NAME) {
+        return {
+          messages: [{
+            role: "user",
+            content: { type: "text", text: await buildAvesPrompt() },
+          }],
+        };
+      }
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        `Unknown prompt: ${req.params.name}`,
+      );
+    },
+  );
+
   mcpServer.setRequestHandler(ListResourcesRequestSchema, handleListResources);
   mcpServer.setRequestHandler(
     ListResourceTemplatesRequestSchema,
@@ -664,6 +697,32 @@ export async function startServer() {
   );
 
   const transport = new StdioServerTransport();
+  server.setRequestHandler(ListPromptsRequestSchema, () => ({
+    prompts: [{
+      name: AVES_PROMPT_NAME,
+      description: AVES_PROMPT_DESCRIPTION,
+      arguments: [],
+    }],
+  }));
+
+  server.setRequestHandler(
+    GetPromptRequestSchema,
+    async (req: { params: { name: string } }) => {
+      if (req.params.name === AVES_PROMPT_NAME) {
+        return {
+          messages: [{
+            role: "user",
+            content: { type: "text", text: await buildAvesPrompt() },
+          }],
+        };
+      }
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        `Unknown prompt: ${req.params.name}`,
+      );
+    },
+  );
+
   server.setRequestHandler(ListResourcesRequestSchema, handleListResources);
   server.setRequestHandler(
     ListResourceTemplatesRequestSchema,
