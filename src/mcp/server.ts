@@ -103,7 +103,8 @@ const LIST_SKILLS_TOOL = {
 
 const QUERY_RUNS_TOOL = {
   name: "query_runs",
-  description: `Query Aves run records and skill approvals using read-only SQL (SELECT/PRAGMA only).\n\nTable schema:\n${RUNS_TABLE_DDL}`,
+  description:
+    `Query Aves run records and skill approvals using read-only SQL (SELECT/PRAGMA only).\n\nTable schema:\n${RUNS_TABLE_DDL}`,
   inputSchema: QueryRunsInputSchema.toJSONSchema(),
   annotations: { readOnlyHint: true },
 };
@@ -167,7 +168,7 @@ async function elicitRequest(msg: string): Promise<unknown> {
         },
       },
       z.object({ action: z.string() }),
-    ),
+    )
   );
 }
 
@@ -626,8 +627,9 @@ export async function startHttpServer(
   await mcpServer.connect(transport);
 
   const controller = new AbortController();
-  const { promise: portPromise, resolve: resolvePort } =
-    Promise.withResolvers<number>();
+  const { promise: portPromise, resolve: resolvePort } = Promise.withResolvers<
+    number
+  >();
   Deno.serve(
     {
       port: 0,

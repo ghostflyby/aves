@@ -11,6 +11,7 @@ import { startBroker } from "./broker.ts";
 import type { SandboxState } from "./sandbox-state.ts";
 import { loadScriptApproval } from "./run-store.ts";
 import { loadPermissionModule } from "./permission-loader.ts";
+import { trackProcess, untrackProcess } from "./proc-tracker.ts";
 
 const BOOT_PATH = new URL("./boot.ts", import.meta.url).pathname;
 
@@ -295,35 +296,44 @@ async function runModuleInSandbox(
     ioDir,
     brokerPath,
   );
+  trackProcess(proc);
 
   // Wait with optional timeout
-  let exitCode: number;
-  let stdoutBytes: Uint8Array;
-  let stderrBytes: Uint8Array;
-  if (timeoutMs && timeoutMs > 0) {
-    const result = await Promise.race([
-      proc.output(),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("Script timed out")), timeoutMs)
-      ),
-    ]).catch((err) => {
-      try { proc.kill(); } catch { /* best-effort */ }
-      throw err;
-    });
-    exitCode = result.code;
-    stdoutBytes = result.stdout;
-    stderrBytes = result.stderr;
-  } else {
-    const result = await proc.output();
-    exitCode = result.code;
-    stdoutBytes = result.stdout;
-    stderrBytes = result.stderr;
+  let exitCode = 0;
+  let stdoutBytes = new Uint8Array();
+  let stderrBytes = new Uint8Array();
+  try {
+    if (timeoutMs && timeoutMs > 0) {
+      const result = await Promise.race([
+        proc.output(),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("Script timed out")), timeoutMs)
+        ),
+      ]);
+      exitCode = result.code;
+      stdoutBytes = result.stdout;
+      stderrBytes = result.stderr;
+    } else {
+      const result = await proc.output();
+      exitCode = result.code;
+      stdoutBytes = result.stdout;
+      stderrBytes = result.stderr;
+    }
+  } catch (err) {
+    try {
+      proc.kill("SIGKILL");
+    } catch { /* already dead */ }
+    try {
+      await proc.output();
+    } catch { /* ignore */ }
+    throw err;
+  } finally {
+    untrackProcess(proc);
   }
 
   const finishedAt = new Date();
   const finishedAtStr = finishedAt.toISOString();
   const durationMs = finishedAt.getTime() - startedAt.getTime();
-
   // Cancel the broker
   const broker = (policy as unknown as Record<string, unknown>)?._broker as {
     cancel(): void;

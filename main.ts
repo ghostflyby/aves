@@ -9,6 +9,7 @@ import {
 } from "./src/server-registry.ts";
 import { closeDb } from "./src/run-store.ts";
 import { disposePool } from "./src/mcp/query-pool.ts";
+import { killAllTracked } from "./src/proc-tracker.ts";
 
 // ============================================================
 // Cleanup — runs on SIGINT, SIGTERM, and process exit
@@ -21,6 +22,7 @@ function registerCleanup() {
   cleanupRegistered = true;
 
   const cleanup = () => {
+    killAllTracked();
     cleanupAll().catch(() => {});
     closeDb();
     disposePool();
