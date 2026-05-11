@@ -55,15 +55,18 @@ export function loadPermissionModule(skillDir: string): PermissionModule {
     decide(permission: PermissionKind, value: string) {
       return new Promise<"allow" | "deny" | null>((resolve) => {
         const id = nextId++;
+        pending.set(id, resolve);
+
+        // Timeout: abort the worker call and fall through to elicitation
         const t = AbortSignal.timeout(5000);
         t.addEventListener("abort", () => {
-          pending.delete(id);
-          resolve(null); // fall through to elicitation
+          if (pending.has(id)) {
+            pending.delete(id);
+            worker.postMessage({ type: "abort", id });
+            resolve(null);
+          }
         }, { once: true });
-        pending.set(id, (result) => {
-          t.removeEventListener("abort", () => {});
-          resolve(result);
-        });
+
         worker.postMessage({ id, permission, value });
       });
     },

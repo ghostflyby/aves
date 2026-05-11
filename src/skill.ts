@@ -233,14 +233,15 @@ export default async function main(input: unknown) {
 
   // Write permission module template (optional — user edits to enable fine-grained permissions)
   const permTemplate = `// Permission module for ${name}
-// Return "allow", "deny", or undefined (let broker decide).
-// Remove this file if not needed.
+// Return "allow" (permit silently), "deny" (block), or undefined (elicit).
+// Second argument is { signal: AbortSignal } — aborted on timeout or shutdown.
+// Functions may be async. Remove this file if not needed.
+type PermitResult = "allow" | "deny" | undefined;
+
 export default {
-  read(path: string): boolean | undefined {},
-  write(path: string): boolean | undefined {},
-  net(host: string): boolean | undefined {},
-  env(name: string): boolean | undefined {},
-  sys(name: "hostname" | "osRelease" | "osUptime" | "loadavg" | "networkInterfaces" | "systemMemoryInfo" | "gid" | "uid"): boolean | undefined {},
+  read(path: string, _opts: { signal: AbortSignal }): PermitResult {},
+  write(path: string, _opts: { signal: AbortSignal }): PermitResult {},
+  net(host: string, _opts: { signal: AbortSignal }): PermitResult {},
 };
 `;
   await Deno.writeTextFile(`${skillDir}/mod.permission.ts`, permTemplate);

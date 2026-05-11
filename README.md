@@ -62,20 +62,23 @@ my-skill/
 
 ### `mod.permission.ts`
 
-A module exporting permission-kind functions. Each function receives a value
-(path, domain, sys kind, env name) and returns `"allow"`, `"deny"`, or nothing
-(fall through to elicitation).
+A module exporting permission-kind functions. Each function receives the
+permission value and an options object with `signal` (aborted on timeout or
+shutdown). Returns `"allow"` (silent), `"deny"` (block), or `undefined`
+(fall through to elicitation). Functions may be `async`.
 
 ```ts
+type PermitResult = "allow" | "deny" | undefined;
+
 export default {
-  read(value: string) {
+  read(value: string, opts: { signal: AbortSignal }): PermitResult {
+    if (opts.signal.aborted) return;
     if (value.startsWith("/Users/me/data/")) return "allow";
-    // return "deny" to block, or nothing to elicit
   },
-  write(value: string) {
+  write(value: string, opts: { signal: AbortSignal }): PermitResult {
     return "deny"; // skill never writes
   },
-  net(value: string) {
+  async net(value: string, opts: { signal: AbortSignal }): Promise<PermitResult> {
     if (value.startsWith("api.example.com")) return "allow";
   },
 };
