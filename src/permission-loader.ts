@@ -53,9 +53,17 @@ export function loadPermissionModule(skillDir: string): PermissionModule {
 
   return {
     decide(permission: PermissionKind, value: string) {
-      return new Promise((resolve) => {
+      return new Promise<"allow" | "deny" | null>((resolve) => {
         const id = nextId++;
-        pending.set(id, resolve);
+        const t = AbortSignal.timeout(5000);
+        t.addEventListener("abort", () => {
+          pending.delete(id);
+          resolve(null); // fall through to elicitation
+        }, { once: true });
+        pending.set(id, (result) => {
+          t.removeEventListener("abort", () => {});
+          resolve(result);
+        });
         worker.postMessage({ id, permission, value });
       });
     },

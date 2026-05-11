@@ -111,7 +111,7 @@ export async function startBroker(
   const listener = Deno.listen({ path: sockPath, transport: "unix" });
 
   const pending = new Map<number, PendingRequest>();
-  let cancelled = false;
+  const ac = new AbortController();
 
   // Hook up elicit resolution so the policy can resume pending requests.
   const originalOnElicitResolved = policy.onElicitResolved.bind(policy);
@@ -127,9 +127,9 @@ export async function startBroker(
   const done = (async () => {
     try {
       for await (const rawConn of listener) {
-        if (cancelled) break;
+        if (ac.signal.aborted) break;
         const conn = rawConn as Deno.UnixConn;
-        handleConnection(conn, policy, pending, cancelled).catch(() => {});
+        handleConnection(conn, policy, pending, ac.signal).catch(() => {});
       }
     } finally {
       try {
@@ -166,7 +166,7 @@ export async function startBroker(
     sockPath,
     done,
     cancel() {
-      cancelled = true;
+      ac.abort();
       try {
         listener.close();
       } catch { /* already closed */ }
@@ -182,21 +182,18 @@ async function handleConnection(
   conn: Deno.UnixConn,
   policy: BrokerPolicy,
   pending: Map<number, PendingRequest>,
-  cancelled: boolean,
+  signal: AbortSignal,
 ): Promise<void> {
   const encoder = new TextEncoder();
   const writer = conn.writable.getWriter();
 
   try {
-    // Read the connection line-by-line
     const decoder = new TextDecoder();
     let buf = "";
-
-    // Read in chunks
     const bufSize = 4096;
     const readBuf = new Uint8Array(bufSize);
 
-    while (!cancelled) {
+    while (!signal.aborted) {
       let n: number | null;
       try {
         n = await conn.read(readBuf);

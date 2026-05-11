@@ -310,7 +310,9 @@ async function runModuleInSandbox(
 
   // Kill the child process when aborted (timeout or shutdown)
   runAc.signal.addEventListener("abort", () => {
-    try { proc.kill("SIGKILL"); } catch { /* already dead */ }
+    try {
+      proc.kill("SIGKILL");
+    } catch { /* already dead */ }
   });
 
   // Optional user-specified timeout
@@ -330,7 +332,9 @@ async function runModuleInSandbox(
     if (!runAc.signal.aborted) {
       runAc.abort(err);
     }
-    try { await proc.output(); } catch { /* ignore */ }
+    try {
+      await proc.output();
+    } catch { /* ignore */ }
     throw err;
   } finally {
     globalAbort.signal.removeEventListener("abort", onGlobalAbort);
