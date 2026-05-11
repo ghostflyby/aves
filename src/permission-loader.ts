@@ -1,7 +1,10 @@
 import type { PermissionKind } from "./broker.ts";
 
 export interface PermissionModule {
-  decide(permission: PermissionKind, value: string): Promise<"allow" | "deny" | null>;
+  decide(
+    permission: PermissionKind,
+    value: string,
+  ): Promise<"allow" | "deny" | null>;
   dispose(): void;
 }
 

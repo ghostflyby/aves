@@ -38,13 +38,8 @@ import {
   savePermissionApproval,
   saveScriptApproval,
 } from "../run-store.ts";
-import type { PermissionRequest, ElicitResolver } from "../broker.ts";
+import type { ElicitResolver, PermissionRequest } from "../broker.ts";
 import type { SandboxState } from "../sandbox-state.ts";
-import {
-  extractCodexReadablePaths,
-  extractCodexWritablePaths,
-  extractCodexNetworkTargets,
-} from "../sandbox-state.ts";
 
 // ============================================================
 // Tool definitions — inputSchema generated from Zod (single source of truth)
@@ -174,54 +169,10 @@ async function elicitRequest(msg: string): Promise<unknown> {
 /** Format a broker PermissionRequest into a user-readable elicitation message. */
 function formatElicitMessage(
   req: PermissionRequest,
-  ceiling: SandboxState | null,
+  _ceiling: SandboxState | null,
 ): string {
-  const ceilingNote = buildCeilingNote(req, ceiling);
   const permLabel = req.permission.toUpperCase();
-  return `${permLabel} permission requested by script:\n\n  ${req.value}${ceilingNote}\n\nApprove?`;
-}
-
-function buildCeilingNote(
-  req: PermissionRequest,
-  ceiling: SandboxState | null,
-): string {
-  if (!ceiling) return "";
-
-  const lines: string[] = [];
-  lines.push("");
-  lines.push("Codex sandbox context:");
-
-  switch (req.permission) {
-    case "read": {
-      const readable = extractCodexReadablePaths(ceiling);
-      if (readable.includes("*")) {
-        lines.push("  (unrestricted read access)");
-      } else {
-        lines.push(`  Readable roots: ${readable.join(", ") || "(none)"}`);
-      }
-      break;
-    }
-    case "write": {
-      const writable = extractCodexWritablePaths(ceiling);
-      if (writable.includes("*")) {
-        lines.push("  (unrestricted write access)");
-      } else {
-        lines.push(`  Writable roots: ${writable.join(", ") || "(none)"}`);
-      }
-      break;
-    }
-    case "net": {
-      const netTargets = extractCodexNetworkTargets(ceiling);
-      if (netTargets.includes("*")) {
-        lines.push("  (network enabled)");
-      } else {
-        lines.push("  (network disabled in sandbox)");
-      }
-      break;
-    }
-  }
-
-  return "\n" + lines.join("\n");
+  return `${permLabel} permission requested:\n\n  ${req.value}\n\nApprove?`;
 }
 
 function isElicitationApproved(result: unknown): boolean {
@@ -242,31 +193,20 @@ async function handleRunScript(args: Record<string, unknown>, meta: unknown) {
   // Extract Codex sandbox state (informational only — not a hard boundary)
   const sandboxState = extractSandboxState(meta);
 
-  // Compute code hash for trust tracking
-  let codeHash: string | null = null;
-  if (result.data.mode === "eval" && result.data.code) {
-    codeHash = await sha256Hex(result.data.code);
-  }
-
   // Build inline elicitation handler — called by broker when a permission needs approval
   const onElicit = async (req: PermissionRequest, resolve: ElicitResolver) => {
     const msg = formatElicitMessage(req, sandboxState);
     const response = await elicitRequest(msg);
-    const approved = isElicitationApproved(response);
-    if (approved && codeHash) {
-      try {
-        await saveScriptApproval({
-          codeHash,
-          approvedAt: new Date().toISOString(),
-          permissions: {},
-        });
-      } catch { /* best-effort */ }
-    }
-    await resolve(approved);
+    await resolve(isElicitationApproved(response));
   };
 
   // Execute — broker handles permissions via the elicitation handler above
-  const record = await executeRun(result.data, undefined, sandboxState, onElicit);
+  const record = await executeRun(
+    result.data,
+    undefined,
+    sandboxState,
+    onElicit,
+  );
   await saveRun(record);
   return { content: [{ type: "text", text: JSON.stringify(record, null, 2) }] };
 }
@@ -360,7 +300,8 @@ async function handleRunSkill(args: Record<string, unknown>, meta: unknown) {
         permApproved = true;
       }
     } else {
-      const msg = `Permission module found for skill "${skill_path}". Review:\n\n` +
+      const msg =
+        `Permission module found for skill "${skill_path}". Review:\n\n` +
         "```ts\n" + permContent + "\n```" +
         "\n\nApprove and save?";
       const result = await elicitRequest(msg);

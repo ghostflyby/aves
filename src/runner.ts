@@ -1,7 +1,12 @@
 import type { ServerPolicy } from "./policy.ts";
 import { resolvePermissions } from "./policy.ts";
 import type { Permissions, RunRecord, RunRequest } from "./types.ts";
-import type { BrokerPolicy, ElicitResolver, PermissionKind, PermissionRequest } from "./broker.ts";
+import type {
+  BrokerPolicy,
+  ElicitResolver,
+  PermissionKind,
+  PermissionRequest,
+} from "./broker.ts";
 import { startBroker } from "./broker.ts";
 import type { SandboxState } from "./sandbox-state.ts";
 import { loadScriptApproval } from "./run-store.ts";
@@ -161,10 +166,12 @@ function createRunBrokerPolicy(
   return {
     async decide(req) {
       // Resolve relative paths against the run directory (read/write only)
-      const isPathPerm = req.permission === "read" || req.permission === "write";
-      const resolvedValue = isPathPerm && !req.value.startsWith("/") && ctx.extraDirs[0]
-        ? `${ctx.extraDirs[0]}/${req.value.replace(/^\.\//, "")}`
-        : req.value;
+      const isPathPerm = req.permission === "read" ||
+        req.permission === "write";
+      const resolvedValue =
+        isPathPerm && !req.value.startsWith("/") && ctx.extraDirs[0]
+          ? `${ctx.extraDirs[0]}/${req.value.replace(/^\.\//, "")}`
+          : req.value;
       const resolvedReq = { ...req, value: resolvedValue };
 
       // 1. Default allowed (safe sys, env, tmp, import domains)
@@ -189,8 +196,8 @@ function createRunBrokerPolicy(
         if (permResult === "allow") return "allow";
       }
 
-      // 4. Hash trust (previously approved same-hash script)
-      if (ctx.codeHash) {
+      // 4. Hash trust — only for skills (gated by mod.permission.ts approval)
+      if (skillDir && ctx.codeHash) {
         try {
           const prev = await loadScriptApproval(ctx.codeHash);
           if (prev) return "allow";
@@ -198,7 +205,9 @@ function createRunBrokerPolicy(
       }
 
       // 5. Read-only with no ceiling → allow silently
-      if (!ctx.codexCeiling && resolvedReq.permission === "read") return "allow";
+      if (!ctx.codexCeiling && resolvedReq.permission === "read") {
+        return "allow";
+      }
 
       // 6. Everything else → elicit (user has final say)
       return "elicit";
@@ -224,7 +233,9 @@ async function runModuleInSandbox(
   mode: RunRecord["mode"],
   codeHash: string | null,
   codexCeiling: SandboxState | null,
-  onElicit: ((req: PermissionRequest, resolve: ElicitResolver) => Promise<void>) | null,
+  onElicit:
+    | ((req: PermissionRequest, resolve: ElicitResolver) => Promise<void>)
+    | null,
   skillDir?: string,
 ): Promise<RunRecord> {
   const runDir = await Deno.makeTempDir({
@@ -350,7 +361,9 @@ export async function executeRun(
   request: RunRequest,
   options?: { policy?: ServerPolicy },
   codexCeiling?: SandboxState | null,
-  onElicit?: ((req: PermissionRequest, resolve: ElicitResolver) => Promise<void>) | null,
+  onElicit?:
+    | ((req: PermissionRequest, resolve: ElicitResolver) => Promise<void>)
+    | null,
 ): Promise<RunRecord> {
   const runId = crypto.randomUUID();
   if (request.mode === "eval") {
@@ -431,7 +444,9 @@ export async function executeSkillRun(
     permissionsOverride?: Permissions;
     projectPath?: string;
     codexCeiling?: SandboxState | null;
-    onElicit?: ((req: PermissionRequest, resolve: ElicitResolver) => Promise<void>) | null;
+    onElicit?:
+      | ((req: PermissionRequest, resolve: ElicitResolver) => Promise<void>)
+      | null;
   },
 ): Promise<SkillRunResult> {
   const runId = crypto.randomUUID();
@@ -465,7 +480,7 @@ export async function executeSkillRun(
     effectivePerms,
     denied,
     "skill",
-    null,
+    codeHash ?? null,
     options?.codexCeiling ?? null,
     options?.onElicit ?? null,
     skillDir,

@@ -43,7 +43,11 @@ export interface BrokerPolicy {
   /** Called when a previously-elicted request is resolved externally. */
   onElicitResolved(id: number, allowed: boolean): void;
   /** Optional: called when a request needs external elicitation. The callee should present a dialog and call `resolve`. */
-  onElicit?: (id: number, req: PermissionRequest, resolve: ElicitResolver) => void;
+  onElicit?: (
+    id: number,
+    req: PermissionRequest,
+    resolve: ElicitResolver,
+  ) => void;
 }
 
 /** Handle returned by startBroker — the caller uses this to wait for
@@ -281,7 +285,10 @@ async function handleRequest(
       });
       // Notify the policy that an elicitation is ready
       policy.onElicit?.(req.id, req, (allowed) => {
-        return new Promise((r) => { policy.onElicitResolved(req.id, allowed); r(); });
+        return new Promise((r) => {
+          policy.onElicitResolved(req.id, allowed);
+          r();
+        });
       });
     });
   }
