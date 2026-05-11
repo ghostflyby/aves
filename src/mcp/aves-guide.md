@@ -33,17 +33,20 @@ The broker decides permissions at runtime. The decision chain:
 
 1. **Auto-allowed** (no prompt): temp dirs (`/tmp`, `$TMPDIR`), safe syscalls
    (hostname, osRelease, memoryInfo…), safe env vars (HOME, USER, PATH…), Deno
-   import domains (deno.land, jsr.io, esm.sh…), and the script's own run
-   directory.
+   import domains (deno.land, jsr.io, esm.sh…).
 
 2. **Permission module** (skills only): if a skill has `mod.permission.ts`,
-   rules defined there run before elicitation. Covered paths are silent.
+   rules run here and can override everything below. Return `"allow"` to permit
+   silently, `"deny"` to block, `undefined` to fall through.
 
-3. **Hash trust** (skills only): a skill with a previously approved code hash
-   runs silently. Changing `mod.ts` invalidates the hash and requires
-   re-approval. Direct `run_script` never gets hash trust.
+3. **Extra dirs** (run dir, module dir, cwd): auto-allowed if the permission
+   module didn't decide. A skill can deny writes to its own run dir.
 
-4. **Elicited** (user prompt): everything else. The user sees the permission
+4. **Hash trust** (skills only): previously approved skill code hash runs
+   silently. Changing `mod.ts` invalidates. Direct `run_script` never gets hash
+   trust.
+
+5. **Elicited** (user prompt): everything else. The user sees the permission
    type and value and chooses approve or deny.
 
 **Important:** direct `run_script` always prompts for non-default permissions.
@@ -86,22 +89,43 @@ Permission module format:
 type PermitResult = "allow" | "deny" | undefined;
 
 export default {
-  read(value: string, opts: { signal: AbortSignal }): PermitResult {
+  async read(
+    value: string,
+    opts: { signal: AbortSignal },
+  ): Promise<PermitResult> {
     if (opts.signal.aborted) return;
     if (value.startsWith("/specific/path/")) return "allow";
   },
-  write(value: string, opts: { signal: AbortSignal }): PermitResult {
+  async write(
+    value: string,
+    opts: { signal: AbortSignal },
+  ): Promise<PermitResult> {
     return "deny"; // block all writes
   },
-  async net(value: string, opts: { signal: AbortSignal }): Promise<PermitResult> {
+  async net(
+    value: string,
+    opts: { signal: AbortSignal },
+  ): Promise<PermitResult> {
     if (value === "api.example.com:443") return "allow";
+  },
+  async env(
+    _name: string,
+    opts: { signal: AbortSignal },
+  ): Promise<PermitResult> {
+    if (opts.signal.aborted) return;
+  },
+  async sys(
+    _kind: string,
+    opts: { signal: AbortSignal },
+  ): Promise<PermitResult> {
+    if (opts.signal.aborted) return;
   },
 };
 ```
 
 Second argument is `{ signal: AbortSignal }` — aborted on timeout or server
-shutdown. Return `"allow"` to permit silently, `"deny"` to block, or
-`undefined` to fall through to elicitation. Functions may be `async`.
+shutdown. Return `"allow"` to permit silently, `"deny"` to block, or `undefined`
+to fall through to elicitation. Functions may be `async`.
 
 ## Database
 

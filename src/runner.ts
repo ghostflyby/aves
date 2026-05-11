@@ -152,9 +152,10 @@ function pathMatches(allowed: string, requested: string): boolean {
 // is elicited so the user has final say):
 //
 //   default allowed (tmp, safe sys/env, import domains) → allow
-//   extra dirs (run dir, module dir) → allow
 //   permission module (skill mod.permission.ts) → allow/deny/null
+//   extra dirs (run dir, module dir, cwd) → allow
 //   hash trust (previously approved same-hash script) → allow
+//   read-only without ceiling → allow
 //   everything else → elicit
 // ============================================================
 
@@ -185,14 +186,7 @@ function createRunBrokerPolicy(
       // 1. Default allowed (safe sys, env, tmp, import domains)
       if (isDefaultAllowed(resolvedReq)) return "allow";
 
-      // 2. Extra dirs (run dir, module dir)
-      if (
-        (resolvedReq.permission === "read" ||
-          resolvedReq.permission === "write") &&
-        ctx.extraDirs.some((d) => pathMatches(d + "/", resolvedValue))
-      ) return "allow";
-
-      // 3. Permission module (skill mod.permission.ts)
+      // 2. Permission module (skill mod.permission.ts) — user's rules override everything below
       if (permModule) {
         const permResult = await permModule.decide(
           resolvedReq.permission,
@@ -202,7 +196,15 @@ function createRunBrokerPolicy(
           return { deny: "denied by skill permission module" };
         }
         if (permResult === "allow") return "allow";
+        // null/undefined → fall through
       }
+
+      // 3. Extra dirs (run dir, module dir, cwd) — auto-allow if permModule didn't decide
+      if (
+        (resolvedReq.permission === "read" ||
+          resolvedReq.permission === "write") &&
+        ctx.extraDirs.some((d) => pathMatches(d + "/", resolvedValue))
+      ) return "allow";
 
       // 4. Hash trust — only for skills (gated by mod.permission.ts approval)
       if (skillDir && ctx.codeHash) {

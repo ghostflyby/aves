@@ -27,8 +27,9 @@ Aves spawns each script in a child Deno process with
 every permission check and applies the decision chain:
 
 1. **Default-allowed** — temp dirs, safe sys calls, import domains → allow
-2. **Run/module dirs** — the script's own working directory → allow
-3. **Permission module** (skills only) — `mod.permission.ts` → allow/deny/null
+2. **Permission module** (skills only) — `mod.permission.ts` → allow/deny/null,
+   overrides everything below
+3. **Run/module dirs** — the script's own working directory → allow
 4. **Hash trust** (skills only) — previously approved code hash → allow
 5. **Elicit** — send MCP `elicitation/create` to the user → approve/deny
 
@@ -64,22 +65,43 @@ my-skill/
 
 A module exporting permission-kind functions. Each function receives the
 permission value and an options object with `signal` (aborted on timeout or
-shutdown). Returns `"allow"` (silent), `"deny"` (block), or `undefined`
-(fall through to elicitation). Functions may be `async`.
+shutdown). Returns `"allow"` (silent), `"deny"` (block), or `undefined` (fall
+through to elicitation). Functions may be `async`.
 
 ```ts
 type PermitResult = "allow" | "deny" | undefined;
 
 export default {
-  read(value: string, opts: { signal: AbortSignal }): PermitResult {
+  async read(
+    value: string,
+    opts: { signal: AbortSignal },
+  ): Promise<PermitResult> {
     if (opts.signal.aborted) return;
     if (value.startsWith("/Users/me/data/")) return "allow";
   },
-  write(value: string, opts: { signal: AbortSignal }): PermitResult {
+  async write(
+    value: string,
+    opts: { signal: AbortSignal },
+  ): Promise<PermitResult> {
     return "deny"; // skill never writes
   },
-  async net(value: string, opts: { signal: AbortSignal }): Promise<PermitResult> {
+  async net(
+    value: string,
+    opts: { signal: AbortSignal },
+  ): Promise<PermitResult> {
     if (value.startsWith("api.example.com")) return "allow";
+  },
+  async env(
+    _name: string,
+    opts: { signal: AbortSignal },
+  ): Promise<PermitResult> {
+    if (opts.signal.aborted) return;
+  },
+  async sys(
+    _kind: string,
+    opts: { signal: AbortSignal },
+  ): Promise<PermitResult> {
+    if (opts.signal.aborted) return;
   },
 };
 ```

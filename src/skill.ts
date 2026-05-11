@@ -239,9 +239,11 @@ export default async function main(input: unknown) {
 type PermitResult = "allow" | "deny" | undefined;
 
 export default {
-  read(path: string, _opts: { signal: AbortSignal }): PermitResult {},
-  write(path: string, _opts: { signal: AbortSignal }): PermitResult {},
-  net(host: string, _opts: { signal: AbortSignal }): PermitResult {},
+  async read(path: string, _opts: { signal: AbortSignal }): Promise<PermitResult> {},
+  async write(path: string, _opts: { signal: AbortSignal }): Promise<PermitResult> {},
+  async net(host: string, _opts: { signal: AbortSignal }): Promise<PermitResult> {},
+  async env(name: string, _opts: { signal: AbortSignal }): Promise<PermitResult> {},
+  async sys(kind: string, _opts: { signal: AbortSignal }): Promise<PermitResult> {},
 };
 `;
   await Deno.writeTextFile(`${skillDir}/mod.permission.ts`, permTemplate);
