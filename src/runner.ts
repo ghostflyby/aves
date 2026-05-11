@@ -102,6 +102,7 @@ const DEFAULT_ALLOWED_ENV = new Set([
   "LANG",
   "LC_ALL",
   "TERM",
+  "AVES_IO_DIR",
 ]);
 
 function resolveTempDirs(): string[] {

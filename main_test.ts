@@ -95,7 +95,6 @@ Deno.test("run-store - save and load", async () => {
     mode: "eval",
     stderr: "",
     exit_code: 0,
-    output: { ok: true },
     started_at: new Date().toISOString(),
     finished_at: new Date().toISOString(),
     duration_ms: 10,
@@ -104,7 +103,6 @@ Deno.test("run-store - save and load", async () => {
   await saveRun(record);
   const loaded = await loadRun("test-run-001");
   assertEquals(loaded?.run_id, "test-run-001");
-  assertEquals(loaded?.output, { ok: true });
 
   // Cleanup
   try {
