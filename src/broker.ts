@@ -11,12 +11,29 @@
 // Types
 // ============================================================
 
+/**
+ * Permission kinds sent through the Deno v1 broker protocol.
+ * Matches the `permission` field in permission-broker-request.v1.json.
+ */
+export type PermissionKind =
+  | "read"
+  | "write"
+  | "net"
+  | "sys"
+  | "env"
+  | "run"
+  | "ffi"
+  | "import";
+
 /** A permission request sent by the child Deno process. */
 export interface PermissionRequest {
   id: number;
-  permission: string;
+  permission: PermissionKind;
   value: string;
 }
+
+/** Signature for resolving a pending elicitation. */
+export type ElicitResolver = (allowed: boolean) => Promise<void>;
 
 /** Policy that decides how to respond to each permission request. */
 export interface BrokerPolicy {
@@ -25,6 +42,8 @@ export interface BrokerPolicy {
   ): Promise<"allow" | { deny: string } | "elicit">;
   /** Called when a previously-elicted request is resolved externally. */
   onElicitResolved(id: number, allowed: boolean): void;
+  /** Optional: called when a request needs external elicitation. The callee should present a dialog and call `resolve`. */
+  onElicit?: (id: number, req: PermissionRequest, resolve: ElicitResolver) => void;
 }
 
 /** Handle returned by startBroker — the caller uses this to wait for
@@ -47,7 +66,7 @@ interface BrokerRequest {
   pid: number;
   id: number;
   datetime: string;
-  permission: string;
+  permission: PermissionKind;
   value: string;
 }
 
@@ -230,7 +249,7 @@ async function handleRequest(
 
   const req: PermissionRequest = {
     id: raw.id,
-    permission: raw.permission ?? "",
+    permission: (raw.permission as PermissionKind) ?? "read",
     value: raw.value ?? "",
   };
 
@@ -259,6 +278,10 @@ async function handleRequest(
           });
           resolve();
         },
+      });
+      // Notify the policy that an elicitation is ready
+      policy.onElicit?.(req.id, req, (allowed) => {
+        return new Promise((r) => { policy.onElicitResolved(req.id, allowed); r(); });
       });
     });
   }

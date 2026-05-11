@@ -1,5 +1,7 @@
+import type { PermissionKind } from "./broker.ts";
+
 export interface PermissionModule {
-  decide(permission: string, value: string): Promise<"allow" | "deny" | null>;
+  decide(permission: PermissionKind, value: string): Promise<"allow" | "deny" | null>;
   dispose(): void;
 }
 
@@ -47,7 +49,7 @@ export function loadPermissionModule(skillDir: string): PermissionModule {
   };
 
   return {
-    decide(permission: string, value: string) {
+    decide(permission: PermissionKind, value: string) {
       return new Promise((resolve) => {
         const id = nextId++;
         pending.set(id, resolve);

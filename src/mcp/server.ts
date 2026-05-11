@@ -34,17 +34,17 @@ import {
 
 import { extractSandboxState } from "../sandbox-state.ts";
 import {
-  applyCodexCeiling,
-  isReadOnly,
-  isWithinCodexCeiling,
-} from "../policy.ts";
-import { getConfig } from "../config.ts";
-import {
   loadPermissionApproval,
-  loadScriptApproval,
   savePermissionApproval,
   saveScriptApproval,
 } from "../run-store.ts";
+import type { PermissionRequest, ElicitResolver } from "../broker.ts";
+import type { SandboxState } from "../sandbox-state.ts";
+import {
+  extractCodexReadablePaths,
+  extractCodexWritablePaths,
+  extractCodexNetworkTargets,
+} from "../sandbox-state.ts";
 
 // ============================================================
 // Tool definitions — inputSchema generated from Zod (single source of truth)
@@ -114,33 +114,10 @@ const QUERY_RUNS_TOOL = {
 
 let _mcpServer: Server | null = null;
 
-const ElicitationResponseSchema = z.object({
-  action: z.string(),
-});
-
-function isElicitationApproved(
-  result: unknown,
-): boolean {
-  const r = result as Record<string, unknown>;
-  return r?.action === "accept";
-}
-
 // ============================================================
-// Request handlers — all input validated with Zod .safeParse()
+// Elicitation helpers
 // ============================================================
 
-function permsDesc(permissions: Record<string, string[] | undefined>): string {
-  const parts: string[] = [];
-  for (const key of ["read", "write", "net", "env"] as const) {
-    const vals = permissions[key];
-    if (vals && vals.length > 0) {
-      parts.push(`  ${key}: ${vals.join(", ")}`);
-    }
-  }
-  return parts.length > 0 ? parts.join("\n") : "(none)";
-}
-
-/** Hash a string using SHA-256, return hex. */
 async function sha256Hex(input: string): Promise<string> {
   const enc = new TextEncoder();
   const data = enc.encode(input);
@@ -148,21 +125,6 @@ async function sha256Hex(input: string): Promise<string> {
   return Array.from(new Uint8Array(hash))
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
-}
-
-/** Check if two permission objects match (same keys, same values). */
-function permissionsMatch(
-  a: Record<string, string[] | undefined>,
-  b: Record<string, string[] | undefined>,
-): boolean {
-  const allKeys = ["read", "write", "net", "env"] as const;
-  for (const k of allKeys) {
-    const aa = (a[k] ?? []).slice().sort();
-    const bb = (b[k] ?? []).slice().sort();
-    if (aa.length !== bb.length) return false;
-    if (!aa.every((v, i) => v === bb[i])) return false;
-  }
-  return true;
 }
 
 let _elicitLock: Promise<void> = Promise.resolve();
@@ -204,123 +166,67 @@ async function elicitRequest(msg: string): Promise<unknown> {
           },
         },
       },
-      ElicitationResponseSchema,
+      z.object({ action: z.string() }),
     )
   );
 }
 
-async function elicitScriptApproval(
-  mode: string,
-  granted: Record<string, string[] | undefined>,
-  dropped: Record<string, string[] | undefined>,
-  codeHash: string | null,
-): Promise<boolean> {
-  const withinCeiling = isWithinCodexCeiling(dropped);
+/** Format a broker PermissionRequest into a user-readable elicitation message. */
+function formatElicitMessage(
+  req: PermissionRequest,
+  ceiling: SandboxState | null,
+): string {
+  const ceilingNote = buildCeilingNote(req, ceiling);
+  const permLabel = req.permission.toUpperCase();
+  return `${permLabel} permission requested by script:\n\n  ${req.value}${ceilingNote}\n\nApprove?`;
+}
 
-  // --- C=N: paths exceed Codex ceiling ---
-  if (!withinCeiling) {
-    const parts: string[] = [];
+function buildCeilingNote(
+  req: PermissionRequest,
+  ceiling: SandboxState | null,
+): string {
+  if (!ceiling) return "";
 
-    if (dropped.read?.length) {
-      parts.push(
-        `Read paths outside Codex sandbox:\n${
-          permsDesc({ read: dropped.read })
-        }`,
-      );
-    }
-    if (dropped.net?.length) {
-      parts.push(
-        `Network targets outside Codex sandbox:\n${
-          permsDesc({ net: dropped.net })
-        }`,
-      );
-    }
-    if (dropped.write?.length) {
-      parts.push(
-        `Write paths DENIED (write cannot exceed Codex sandbox):\n${
-          permsDesc({ write: dropped.write })
-        }`,
-      );
-    }
+  const lines: string[] = [];
+  lines.push("");
+  lines.push("Codex sandbox context:");
 
-    if (parts.length === 0) return false;
-
-    const hasGrantable = (granted.read?.length ?? 0) > 0 ||
-      (granted.net?.length ?? 0) > 0;
-    const modeLabel = mode === "eval" ? "Eval" : "Module";
-    const preamble = hasGrantable
-      ? `Some ${modeLabel} script permissions exceed the Codex sandbox:\n\n`
-      : `${modeLabel} script cannot run — no permissions within Codex sandbox.`;
-    const msg = `${preamble}${parts.join("\n\n")}${
-      hasGrantable ? "\n\nApprove with restricted permissions?" : ""
-    }`;
-
-    const result = await elicitRequest(msg);
-    return isElicitationApproved(result);
-  }
-
-  // --- C=Y: all within ceiling ---
-
-  // Read-only + config auto-approve → silent
-  if (isReadOnly(granted)) {
-    try {
-      const config = await getConfig();
-      if (config.execution.autoApproveReadonly) {
-        return true;
+  switch (req.permission) {
+    case "read": {
+      const readable = extractCodexReadablePaths(ceiling);
+      if (readable.includes("*")) {
+        lines.push("  (unrestricted read access)");
+      } else {
+        lines.push(`  Readable roots: ${readable.join(", ") || "(none)"}`);
       }
-    } catch { /* config unreadable, fall through */ }
-  }
-
-  // Has write or net → check hash trust
-  const hasWrite = (granted.write?.length ?? 0) > 0;
-  const hasNet = (granted.net?.length ?? 0) > 0;
-
-  if (hasWrite || hasNet) {
-    if (codeHash) {
-      try {
-        const prev = await loadScriptApproval(codeHash);
-        if (prev) {
-          if (permissionsMatch(granted, prev.permissions)) {
-            return true; // Hash + permissions match → silent
-          }
-          // Permissions changed
-          const msg = [
-            `Script permissions changed since last approval.`,
-            ``,
-            `Previously approved:`,
-            permsDesc(prev.permissions),
-            ``,
-            `Now requested:`,
-            permsDesc(granted),
-            ``,
-            `Approve?`,
-          ].join("\n");
-          const result = await elicitRequest(msg);
-          return isElicitationApproved(result);
-        }
-      } catch { /* DB error, fall through to first-run path */ }
+      break;
     }
-
-    // First run with write/net → elicit
-    const modeLabel = mode === "eval" ? "Eval" : "Module";
-    const msg =
-      `Approve ${modeLabel} script execution?\n\nRequested permissions:\n${
-        permsDesc(granted)
-      }`;
-    const result = await elicitRequest(msg);
-    return isElicitationApproved(result);
+    case "write": {
+      const writable = extractCodexWritablePaths(ceiling);
+      if (writable.includes("*")) {
+        lines.push("  (unrestricted write access)");
+      } else {
+        lines.push(`  Writable roots: ${writable.join(", ") || "(none)"}`);
+      }
+      break;
+    }
+    case "net": {
+      const netTargets = extractCodexNetworkTargets(ceiling);
+      if (netTargets.includes("*")) {
+        lines.push("  (network enabled)");
+      } else {
+        lines.push("  (network disabled in sandbox)");
+      }
+      break;
+    }
   }
 
-  // Read-only, config didn't allow silent → normal elicit (compat)
-  const modeLabel = mode === "eval" ? "Eval" : "Module";
-  const hasPerms = Object.values(granted).some((v) => v && v.length > 0);
-  if (!hasPerms) return true;
-  const msg =
-    `Approve ${modeLabel} script execution?\n\nRequested permissions:\n${
-      permsDesc(granted)
-    }`;
-  const result = await elicitRequest(msg);
-  return isElicitationApproved(result);
+  return "\n" + lines.join("\n");
+}
+
+function isElicitationApproved(result: unknown): boolean {
+  const r = result as Record<string, unknown>;
+  return r?.action === "accept";
 }
 
 async function handleRunScript(args: Record<string, unknown>, meta: unknown) {
@@ -333,14 +239,8 @@ async function handleRunScript(args: Record<string, unknown>, meta: unknown) {
     );
   }
 
-  // Extract Codex sandbox state from MCP _meta
+  // Extract Codex sandbox state (informational only — not a hard boundary)
   const sandboxState = extractSandboxState(meta);
-
-  // Apply Codex ceiling to requested permissions
-  const { granted, dropped } = applyCodexCeiling(
-    result.data.permissions ?? {},
-    sandboxState,
-  );
 
   // Compute code hash for trust tracking
   let codeHash: string | null = null;
@@ -348,35 +248,25 @@ async function handleRunScript(args: Record<string, unknown>, meta: unknown) {
     codeHash = await sha256Hex(result.data.code);
   }
 
-  // Approval (truth table)
-  if (
-    !await elicitScriptApproval(result.data.mode, granted, dropped, codeHash)
-  ) {
-    return {
-      content: [{
-        type: "text",
-        text: JSON.stringify({
-          ok: false,
-          error: "Script execution rejected by user",
-        }),
-      }],
-    };
-  }
+  // Build inline elicitation handler — called by broker when a permission needs approval
+  const onElicit = async (req: PermissionRequest, resolve: ElicitResolver) => {
+    const msg = formatElicitMessage(req, sandboxState);
+    const response = await elicitRequest(msg);
+    const approved = isElicitationApproved(response);
+    if (approved && codeHash) {
+      try {
+        await saveScriptApproval({
+          codeHash,
+          approvedAt: new Date().toISOString(),
+          permissions: {},
+        });
+      } catch { /* best-effort */ }
+    }
+    await resolve(approved);
+  };
 
-  // Save approval for future silent runs (only if we have a hash)
-  if (codeHash) {
-    try {
-      await saveScriptApproval({
-        codeHash,
-        approvedAt: new Date().toISOString(),
-        permissions: granted,
-      });
-    } catch { /* best-effort */ }
-  }
-
-  // Execute with ceiling-granted permissions
-  const modifiedRequest = { ...result.data, permissions: granted };
-  const record = await executeRun(modifiedRequest, undefined, sandboxState);
+  // Execute — broker handles permissions via the elicitation handler above
+  const record = await executeRun(result.data, undefined, sandboxState, onElicit);
   await saveRun(record);
   return { content: [{ type: "text", text: JSON.stringify(record, null, 2) }] };
 }
@@ -448,7 +338,6 @@ async function handleRunSkill(args: Record<string, unknown>, meta: unknown) {
   let permApproved = false;
   try {
     await Deno.stat(`${skill_path}/mod.permission.ts`);
-    // Permission module exists — check if approved
     const permContent = await Deno.readTextFile(
       `${skill_path}/mod.permission.ts`,
     );
@@ -457,11 +346,8 @@ async function handleRunSkill(args: Record<string, unknown>, meta: unknown) {
     if (prev && prev.permissionHash === permHash) {
       permApproved = true;
     } else if (prev && prev.permissionHash !== permHash) {
-      // Hash changed — need re-approval
       const msg =
-        `Permission module for skill "${skill_path}" has changed. Review:
-
-` +
+        `Permission module for skill "${skill_path}" has changed. Review:\n\n` +
         "```ts\n" + permContent + "\n```" +
         "\n\nApprove and save?";
       const result = await elicitRequest(msg);
@@ -474,10 +360,7 @@ async function handleRunSkill(args: Record<string, unknown>, meta: unknown) {
         permApproved = true;
       }
     } else {
-      // First time — elicit approval
-      const msg = `Permission module found for skill "${skill_path}". Review:
-
-` +
+      const msg = `Permission module found for skill "${skill_path}". Review:\n\n` +
         "```ts\n" + permContent + "\n```" +
         "\n\nApprove and save?";
       const result = await elicitRequest(msg);
@@ -494,54 +377,42 @@ async function handleRunSkill(args: Record<string, unknown>, meta: unknown) {
     // No permission module — no additional approval needed
   }
 
-  // Extract Codex sandbox state
-  const sandboxState = extractSandboxState(meta);
-
-  // Use override permissions or empty (skill permissions come from override only)
-  const requestedPerms = permissions ?? {};
-
-  // Apply Codex ceiling
-  const { granted, dropped } = applyCodexCeiling(
-    requestedPerms,
-    sandboxState,
-  );
-
-  // Approval: if perm module approved and all within ceiling, skip elicitation
-  let trusted: boolean;
-  if (permApproved && isWithinCodexCeiling(dropped)) {
-    trusted = true;
-  } else {
-    trusted = await elicitScriptApproval(
-      "skill",
-      granted,
-      dropped,
-      codeHash,
-    );
-  }
-  if (!trusted) {
+  if (!permApproved) {
     return {
       content: [{
         type: "text",
         text: JSON.stringify({
           ok: false,
-          error: "Skill execution rejected by user",
+          error: "Permission module not approved",
         }),
       }],
     };
   }
 
-  // Save approval for future silent runs
-  try {
-    await saveScriptApproval({
-      codeHash,
-      approvedAt: new Date().toISOString(),
-      permissions: granted,
-    });
-  } catch { /* best-effort */ }
+  // Extract Codex sandbox state (informational only)
+  const sandboxState = extractSandboxState(meta);
 
-  // Execute with ceiling-granted permissions
+  // Build inline elicitation handler
+  const onElicit = async (req: PermissionRequest, resolve: ElicitResolver) => {
+    const msg = formatElicitMessage(req, sandboxState);
+    const response = await elicitRequest(msg);
+    const approved = isElicitationApproved(response);
+    if (approved) {
+      try {
+        await saveScriptApproval({
+          codeHash,
+          approvedAt: new Date().toISOString(),
+          permissions: {},
+        });
+      } catch { /* best-effort */ }
+    }
+    await resolve(approved);
+  };
+
   const result = await executeSkillRun(skill_path, input ?? {}, {
-    permissionsOverride: Object.keys(granted).length > 0 ? granted : undefined,
+    permissionsOverride: permissions,
+    codexCeiling: sandboxState,
+    onElicit,
   });
 
   if (!result.record) {

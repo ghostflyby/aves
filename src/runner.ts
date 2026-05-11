@@ -1,14 +1,9 @@
 import type { ServerPolicy } from "./policy.ts";
 import { resolvePermissions } from "./policy.ts";
 import type { Permissions, RunRecord, RunRequest } from "./types.ts";
-import type { BrokerPolicy } from "./broker.ts";
+import type { BrokerPolicy, ElicitResolver, PermissionKind, PermissionRequest } from "./broker.ts";
 import { startBroker } from "./broker.ts";
 import type { SandboxState } from "./sandbox-state.ts";
-import {
-  extractCodexNetworkTargets,
-  extractCodexReadablePaths,
-  extractCodexWritablePaths,
-} from "./sandbox-state.ts";
 import { loadScriptApproval } from "./run-store.ts";
 import { loadPermissionModule } from "./permission-loader.ts";
 
@@ -107,7 +102,7 @@ function resolveTempDirs(): string[] {
 }
 
 function isDefaultAllowed(
-  req: { permission: string; value: string },
+  req: { permission: PermissionKind; value: string },
 ): boolean {
   switch (req.permission) {
     case "sys":
@@ -127,71 +122,62 @@ function isDefaultAllowed(
 }
 
 // ============================================================
-// Ceiling check
+// Path matching (handles macOS /var -> /private/var symlink)
 // ============================================================
 
-/** Match a path against an allow-list prefix, handling macOS /var -> /private/var symlink. */
 function pathMatches(allowed: string, requested: string): boolean {
   if (requested.startsWith(allowed)) return true;
-  // macOS /var is symlinked to /private/var
   const normReq = requested.replace(/^\/private/, "");
   const normAllowed = allowed.replace(/^\/private/, "");
   return normReq.startsWith(normAllowed) || allowed.startsWith(normReq);
 }
 
-function checkCeiling(
-  req: { permission: string; value: string },
-  ceiling: SandboxState,
-): "allow" | "deny" | "unknown" {
-  switch (req.permission) {
-    case "read": {
-      const readable = extractCodexReadablePaths(ceiling);
-      if (readable.includes("*")) return "allow";
-      return readable.some((p) => pathMatches(p, req.value)) ? "allow" : "deny";
-    }
-    case "write": {
-      const writable = extractCodexWritablePaths(ceiling);
-      if (writable.includes("*")) return "allow";
-      return writable.some((p) => pathMatches(p, req.value)) ? "allow" : "deny";
-    }
-    case "net": {
-      const netTargets = extractCodexNetworkTargets(ceiling);
-      return netTargets.includes("*") ? "allow" : "deny";
-    }
-    default:
-      return "deny";
-  }
-}
-
 // ============================================================
 // createRunBrokerPolicy
+//
+// Decision chain (no hard denies — everything beyond defaults
+// is elicited so the user has final say):
+//
+//   default allowed (tmp, safe sys/env, import domains) → allow
+//   extra dirs (run dir, module dir) → allow
+//   permission module (skill mod.permission.ts) → allow/deny/null
+//   hash trust (previously approved same-hash script) → allow
+//   everything else → elicit
 // ============================================================
 
+/** Context passed through to the elicitation handler. */
+export interface RunElicitContext {
+  codeHash: string | null;
+  codexCeiling: SandboxState | null;
+  extraDirs: string[];
+}
+
 function createRunBrokerPolicy(
-  codexCeiling: SandboxState | null,
-  codeHash: string | null,
-  extraDirs: string[],
+  ctx: RunElicitContext,
   skillDir?: string,
 ): BrokerPolicy {
-  // Load permission module at policy creation time (if skillDir provided)
   const permModule = skillDir ? loadPermissionModule(skillDir) : null;
 
   return {
     async decide(req) {
-      // Resolve relative paths against the run directory
-      const resolvedValue = req.value.startsWith("/") || !extraDirs[0]
-        ? req.value
-        : `${extraDirs[0]}/${req.value.replace(/^\.\//, "")}`;
+      // Resolve relative paths against the run directory (read/write only)
+      const isPathPerm = req.permission === "read" || req.permission === "write";
+      const resolvedValue = isPathPerm && !req.value.startsWith("/") && ctx.extraDirs[0]
+        ? `${ctx.extraDirs[0]}/${req.value.replace(/^\.\//, "")}`
+        : req.value;
       const resolvedReq = { ...req, value: resolvedValue };
-      // Always allow safe defaults (no ceiling or trust needed)
+
+      // 1. Default allowed (safe sys, env, tmp, import domains)
       if (isDefaultAllowed(resolvedReq)) return "allow";
+
+      // 2. Extra dirs (run dir, module dir)
       if (
         (resolvedReq.permission === "read" ||
           resolvedReq.permission === "write") &&
-        extraDirs.some((d) => resolvedValue.startsWith(d + "/"))
+        ctx.extraDirs.some((d) => pathMatches(d + "/", resolvedValue))
       ) return "allow";
 
-      // Check permission module for fine-grained rules (before ceiling)
+      // 3. Permission module (skill mod.permission.ts)
       if (permModule) {
         const permResult = await permModule.decide(
           resolvedReq.permission,
@@ -201,68 +187,25 @@ function createRunBrokerPolicy(
           return { deny: "denied by skill permission module" };
         }
         if (permResult === "allow") return "allow";
-        // null → fall through to ceiling / hash trust / deny
       }
 
-      // Check Codex ceiling
-      if (codexCeiling) {
-        console.error(
-          extractCodexWritablePaths(codexCeiling).slice(0, 5),
-        );
-        const ceilingResult = checkCeiling(resolvedReq, codexCeiling);
-        if (ceilingResult === "deny") {
-          return { deny: "outside Codex sandbox" };
-        }
-        if (ceilingResult === "allow") {
-          // Unrestricted ceiling — no need to check further
-          if (codexCeiling) {
-            console.error(
-              extractCodexWritablePaths(codexCeiling).slice(0, 5),
-            );
-            const readable = extractCodexReadablePaths(codexCeiling);
-            const writable = extractCodexWritablePaths(codexCeiling);
-            const netTargets = extractCodexNetworkTargets(codexCeiling);
-            if (
-              readable.includes("*") && writable.includes("*") &&
-              netTargets.includes("*")
-            ) {
-              return "allow";
-            }
-          }
-          // Within ceiling — check hash trust for auto-approval
-          if (codeHash) {
-            try {
-              const prev = await loadScriptApproval(codeHash);
-              if (prev) {
-                return "allow";
-              }
-            } catch {
-              // DB error — deny instead of elicit
-            }
-          }
-          // First run within ceiling — deny (elicit handled by server)
-          return { deny: "requires approval" };
-        }
+      // 4. Hash trust (previously approved same-hash script)
+      if (ctx.codeHash) {
+        try {
+          const prev = await loadScriptApproval(ctx.codeHash);
+          if (prev) return "allow";
+        } catch { /* DB error, fall through to elicit */ }
       }
 
-      // No ceiling info — check permission module for non-read, otherwise allow reads
-      if (permModule) {
-        const permResult = await permModule.decide(
-          resolvedReq.permission,
-          resolvedValue,
-        );
-        if (permResult === "deny") {
-          return { deny: "denied by skill permission module" };
-        }
-        if (permResult === "allow") return "allow";
-        // null → fall through to deny
-      }
-      if (resolvedReq.permission === "read") return "allow";
-      return { deny: "outside Codex sandbox" };
+      // 5. Read-only with no ceiling → allow silently
+      if (!ctx.codexCeiling && resolvedReq.permission === "read") return "allow";
+
+      // 6. Everything else → elicit (user has final say)
+      return "elicit";
     },
 
     onElicitResolved(_id, _allowed) {
-      // No-op: elicitation handled by server, not broker
+      // No-op: elicitation handled by the server via onElicit
     },
   };
 }
@@ -279,8 +222,9 @@ async function runModuleInSandbox(
   _userPerms: Permissions,
   _denied: string[],
   mode: RunRecord["mode"],
-  codeHash?: string | null,
-  codexCeiling?: SandboxState | null,
+  codeHash: string | null,
+  codexCeiling: SandboxState | null,
+  onElicit: ((req: PermissionRequest, resolve: ElicitResolver) => Promise<void>) | null,
   skillDir?: string,
 ): Promise<RunRecord> {
   const runDir = await Deno.makeTempDir({
@@ -298,18 +242,28 @@ async function runModuleInSandbox(
   const realModulePath = await Deno.realPath(modulePath);
   const realRunDir = await Deno.realPath(runDir);
 
-  // Start the permission broker
-  const policy = createRunBrokerPolicy(codexCeiling ?? null, codeHash ?? null, [
-    realRunDir,
-    realModulePath.substring(0, realModulePath.lastIndexOf("/")),
-  ], skillDir);
-  let brokerPath = "";
+  // Build elicit context
+  const ctx: RunElicitContext = {
+    codeHash,
+    codexCeiling,
+    extraDirs: [
+      realRunDir,
+      realModulePath.substring(0, realModulePath.lastIndexOf("/")),
+    ],
+  };
 
+  // Start the permission broker
+  const policy = createRunBrokerPolicy(ctx, skillDir);
+  if (onElicit) {
+    policy.onElicit = (_id, req, resolve) => {
+      onElicit(req, resolve).catch(() => resolve(false));
+    };
+  }
+
+  let brokerPath = "";
   try {
     const broker = await startBroker(policy);
     brokerPath = broker.sockPath;
-
-    // Store the handle on the policy for cleanup (done promise + cancel)
     (policy as unknown as Record<string, unknown>)._broker = broker;
   } catch (err) {
     console.error(
@@ -396,13 +350,13 @@ export async function executeRun(
   request: RunRequest,
   options?: { policy?: ServerPolicy },
   codexCeiling?: SandboxState | null,
+  onElicit?: ((req: PermissionRequest, resolve: ElicitResolver) => Promise<void>) | null,
 ): Promise<RunRecord> {
   const runId = crypto.randomUUID();
   if (request.mode === "eval") {
     if (!request.code) {
       throw new Error("Invalid request: eval mode requires 'code'");
     }
-    // Write code to temp file, then delegate to runModuleInSandbox
     const evalDir = await Deno.makeTempDir({
       prefix: "aves_",
       suffix: `_eval_${runId}`,
@@ -424,9 +378,9 @@ export async function executeRun(
       "eval",
       codeHash,
       codexCeiling ?? null,
+      onElicit ?? null,
     );
 
-    // Clean up eval dir (runModuleInSandbox cleans its own dir)
     try {
       await Deno.remove(evalDir, { recursive: true });
     } catch { /* skip */ }
@@ -455,8 +409,9 @@ export async function executeRun(
     userPerms,
     denied,
     request.mode,
-    undefined,
+    null,
     codexCeiling ?? null,
+    onElicit ?? null,
   );
 }
 
@@ -468,10 +423,6 @@ export interface SkillRunResult {
   record: RunRecord;
 }
 
-/**
- * Execute a skill by its directory path.
- * No longer uses skill.json — reads mod.ts, builds permissions from override.
- */
 export async function executeSkillRun(
   skillDir: string,
   input: Record<string, unknown>,
@@ -480,18 +431,17 @@ export async function executeSkillRun(
     permissionsOverride?: Permissions;
     projectPath?: string;
     codexCeiling?: SandboxState | null;
+    onElicit?: ((req: PermissionRequest, resolve: ElicitResolver) => Promise<void>) | null;
   },
 ): Promise<SkillRunResult> {
   const runId = crypto.randomUUID();
 
-  // Verify SKILL.md exists
   try {
     await Deno.stat(`${skillDir}/SKILL.md`);
   } catch {
     throw new Error(`Not a skill directory (SKILL.md not found): ${skillDir}`);
   }
 
-  // Read mod.ts for code hash
   let codeHash: string | undefined;
   try {
     const modContent = await Deno.readTextFile(`${skillDir}/mod.ts`);
@@ -501,8 +451,6 @@ export async function executeSkillRun(
   }
 
   const entrypoint = `${skillDir}/mod.ts`;
-
-  // Use permissions override as the base; no manifest to merge with
   const effectivePerms = options?.permissionsOverride ?? {};
   const { granted, denied } = resolvePermissions(
     effectivePerms,
@@ -517,13 +465,13 @@ export async function executeSkillRun(
     effectivePerms,
     denied,
     "skill",
-    undefined,
+    null,
     options?.codexCeiling ?? null,
+    options?.onElicit ?? null,
     skillDir,
   );
 
   record.code_hash = codeHash;
-
   return { record };
 }
 
