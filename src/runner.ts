@@ -46,7 +46,8 @@ const BROKER_NET_ALLOW = [
 
 function spawnDenoWithBroker(
   modulePath: string,
-  runDir: string,
+  scriptCwd: string,
+  ioDir: string,
   sockPath: string,
 ): Deno.ChildProcess {
   const args = [
@@ -58,12 +59,13 @@ function spawnDenoWithBroker(
   ];
   const cmd = new Deno.Command("deno", {
     args,
-    cwd: runDir,
+    cwd: scriptCwd,
     stdout: "piped",
     stderr: "piped",
     env: {
       ...Deno.env.toObject(),
       DENO_PERMISSION_BROKER_PATH: sockPath,
+      AVES_IO_DIR: ioDir,
     },
   });
   return cmd.spawn();
@@ -236,31 +238,35 @@ async function runModuleInSandbox(
   onElicit:
     | ((req: PermissionRequest, resolve: ElicitResolver) => Promise<void>)
     | null,
+  scriptCwd?: string,
+  timeoutMs?: number,
   skillDir?: string,
 ): Promise<RunRecord> {
-  const runDir = await Deno.makeTempDir({
-    prefix: "aves_",
-    suffix: `_run_${runId}`,
+  const ioDir = await Deno.makeTempDir({
+    prefix: "aves_io_",
+    suffix: `_${runId}`,
   });
   const startedAt = new Date();
   const startedAtStr = startedAt.toISOString();
 
   await Deno.writeTextFile(
-    `${runDir}/input.json`,
+    `${ioDir}/input.json`,
     JSON.stringify(input),
   );
 
+  const realCwd = scriptCwd ? await Deno.realPath(scriptCwd) : ioDir;
   const realModulePath = await Deno.realPath(modulePath);
-  const realRunDir = await Deno.realPath(runDir);
+  const realIoDir = await Deno.realPath(ioDir);
 
-  // Build elicit context
+  // Build elicit context — extraDirs includes cwd, module dir, io dir
+  const extraDirs = [realIoDir];
+  if (realCwd !== realIoDir) extraDirs.push(realCwd);
+  extraDirs.push(realModulePath.substring(0, realModulePath.lastIndexOf("/")));
+
   const ctx: RunElicitContext = {
     codeHash,
     codexCeiling,
-    extraDirs: [
-      realRunDir,
-      realModulePath.substring(0, realModulePath.lastIndexOf("/")),
-    ],
+    extraDirs,
   };
 
   // Start the permission broker
@@ -285,13 +291,34 @@ async function runModuleInSandbox(
   // Spawn the child Deno process
   const proc = spawnDenoWithBroker(
     realModulePath,
-    runDir,
+    realCwd,
+    ioDir,
     brokerPath,
   );
 
-  // Wait for the subprocess to finish
-  const { code: exitCode, stdout: stdoutBytes, stderr: stderrBytes } =
-    await proc.output();
+  // Wait with optional timeout
+  let exitCode: number;
+  let stdoutBytes: Uint8Array;
+  let stderrBytes: Uint8Array;
+  if (timeoutMs && timeoutMs > 0) {
+    const result = await Promise.race([
+      proc.output(),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("Script timed out")), timeoutMs)
+      ),
+    ]).catch((err) => {
+      try { proc.kill(); } catch { /* best-effort */ }
+      throw err;
+    });
+    exitCode = result.code;
+    stdoutBytes = result.stdout;
+    stderrBytes = result.stderr;
+  } else {
+    const result = await proc.output();
+    exitCode = result.code;
+    stdoutBytes = result.stdout;
+    stderrBytes = result.stderr;
+  }
 
   const finishedAt = new Date();
   const finishedAtStr = finishedAt.toISOString();
@@ -315,7 +342,7 @@ async function runModuleInSandbox(
   let output: unknown = null;
   let error: string | undefined;
   try {
-    const outputText = await Deno.readTextFile(`${realRunDir}/output.json`);
+    const outputText = await Deno.readTextFile(`${realIoDir}/output.json`);
     const parsed = JSON.parse(outputText);
     if (parsed.ok) output = parsed.data;
     else error = parsed.error;
@@ -328,11 +355,11 @@ async function runModuleInSandbox(
   let parsedInput: Record<string, unknown> | undefined;
   try {
     parsedInput = JSON.parse(
-      await Deno.readTextFile(`${realRunDir}/parsed_input.json`),
+      await Deno.readTextFile(`${realIoDir}/parsed_input.json`),
     );
   } catch { /* no-op */ }
   try {
-    await Deno.remove(runDir, { recursive: true });
+    await Deno.remove(ioDir, { recursive: true });
   } catch { /* best-effort */ }
 
   return {
@@ -366,6 +393,11 @@ export async function executeRun(
     | null,
 ): Promise<RunRecord> {
   const runId = crypto.randomUUID();
+  const cwd = (request as Record<string, unknown>).cwd as string | undefined;
+  const timeoutMs = (request as Record<string, unknown>).timeout_ms as
+    | number
+    | undefined;
+
   if (request.mode === "eval") {
     if (!request.code) {
       throw new Error("Invalid request: eval mode requires 'code'");
@@ -392,6 +424,8 @@ export async function executeRun(
       codeHash,
       codexCeiling ?? null,
       onElicit ?? null,
+      cwd,
+      timeoutMs,
     );
 
     try {
@@ -425,6 +459,8 @@ export async function executeRun(
     null,
     codexCeiling ?? null,
     onElicit ?? null,
+    cwd,
+    timeoutMs,
   );
 }
 
@@ -447,6 +483,8 @@ export async function executeSkillRun(
     onElicit?:
       | ((req: PermissionRequest, resolve: ElicitResolver) => Promise<void>)
       | null;
+    cwd?: string;
+    timeoutMs?: number;
   },
 ): Promise<SkillRunResult> {
   const runId = crypto.randomUUID();
@@ -483,6 +521,8 @@ export async function executeSkillRun(
     codeHash ?? null,
     options?.codexCeiling ?? null,
     options?.onElicit ?? null,
+    options?.cwd,
+    options?.timeoutMs,
     skillDir,
   );
 

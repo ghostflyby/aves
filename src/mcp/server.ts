@@ -103,8 +103,7 @@ const LIST_SKILLS_TOOL = {
 
 const QUERY_RUNS_TOOL = {
   name: "query_runs",
-  description:
-    `Query Aves run records and skill approvals using read-only SQL (SELECT/PRAGMA only).\n\nTable schema:\n${RUNS_TABLE_DDL}`,
+  description: `Query Aves run records and skill approvals using read-only SQL (SELECT/PRAGMA only).\n\nTable schema:\n${RUNS_TABLE_DDL}`,
   inputSchema: QueryRunsInputSchema.toJSONSchema(),
   annotations: { readOnlyHint: true },
 };
@@ -168,7 +167,7 @@ async function elicitRequest(msg: string): Promise<unknown> {
         },
       },
       z.object({ action: z.string() }),
-    )
+    ),
   );
 }
 
@@ -192,7 +191,8 @@ async function handleRunScript(args: Record<string, unknown>, meta: unknown) {
     throw new McpError(
       ErrorCode.InvalidParams,
       result.error.issues
-        .map((i) => `${i.path.join(".")}: ${i.message}`).join("; "),
+        .map((i) => `${i.path.join(".")}: ${i.message}`)
+        .join("; "),
     );
   }
 
@@ -292,7 +292,9 @@ async function handleRunSkill(args: Record<string, unknown>, meta: unknown) {
     } else if (prev && prev.permissionHash !== permHash) {
       const msg =
         `Permission module for skill "${skill_path}" has changed. Review:\n\n` +
-        "```ts\n" + permContent + "\n```" +
+        "```ts\n" +
+        permContent +
+        "\n```" +
         "\n\nApprove and save?";
       const result = await elicitRequest(msg);
       if (isElicitationApproved(result)) {
@@ -306,7 +308,9 @@ async function handleRunSkill(args: Record<string, unknown>, meta: unknown) {
     } else {
       const msg =
         `Permission module found for skill "${skill_path}". Review:\n\n` +
-        "```ts\n" + permContent + "\n```" +
+        "```ts\n" +
+        permContent +
+        "\n```" +
         "\n\nApprove and save?";
       const result = await elicitRequest(msg);
       if (isElicitationApproved(result)) {
@@ -324,13 +328,15 @@ async function handleRunSkill(args: Record<string, unknown>, meta: unknown) {
 
   if (!permApproved) {
     return {
-      content: [{
-        type: "text",
-        text: JSON.stringify({
-          ok: false,
-          error: "Permission module not approved",
-        }),
-      }],
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            ok: false,
+            error: "Permission module not approved",
+          }),
+        },
+      ],
     };
   }
 
@@ -387,10 +393,12 @@ async function handleSuggestSkills(args: Record<string, unknown>) {
 
   if (!result.ok || !result.rows) {
     return {
-      content: [{
-        type: "text",
-        text: JSON.stringify({ suggestions: [], total_clusters: 0 }),
-      }],
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ suggestions: [], total_clusters: 0 }),
+        },
+      ],
     };
   }
 
@@ -404,13 +412,15 @@ async function handleSuggestSkills(args: Record<string, unknown>) {
   }
 
   return {
-    content: [{
-      type: "text",
-      text: JSON.stringify({
-        suggestions,
-        total_clusters: suggestions.length,
-      }),
-    }],
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify({
+          suggestions,
+          total_clusters: suggestions.length,
+        }),
+      },
+    ],
   };
 }
 
@@ -574,11 +584,13 @@ export async function startHttpServer(
   );
 
   mcpServer.setRequestHandler(ListPromptsRequestSchema, () => ({
-    prompts: [{
-      name: AVES_PROMPT_NAME,
-      description: AVES_PROMPT_DESCRIPTION,
-      arguments: [],
-    }],
+    prompts: [
+      {
+        name: AVES_PROMPT_NAME,
+        description: AVES_PROMPT_DESCRIPTION,
+        arguments: [],
+      },
+    ],
   }));
 
   mcpServer.setRequestHandler(
@@ -586,10 +598,12 @@ export async function startHttpServer(
     async (req: { params: { name: string } }) => {
       if (req.params.name === AVES_PROMPT_NAME) {
         return {
-          messages: [{
-            role: "user",
-            content: { type: "text", text: await buildAvesPrompt() },
-          }],
+          messages: [
+            {
+              role: "user",
+              content: { type: "text", text: await buildAvesPrompt() },
+            },
+          ],
         };
       }
       throw new McpError(
@@ -612,20 +626,24 @@ export async function startHttpServer(
   await mcpServer.connect(transport);
 
   const controller = new AbortController();
-  const { promise: portPromise, resolve: resolvePort } = Promise.withResolvers<
-    number
-  >();
-  Deno.serve({
-    port: 0,
-    hostname: host,
-    signal: controller.signal,
-    onListen: ({ port: actualPort }) => {
-      console.error(`Aves MCP HTTP server listening on ${host}:${actualPort}`);
-      resolvePort(actualPort);
+  const { promise: portPromise, resolve: resolvePort } =
+    Promise.withResolvers<number>();
+  Deno.serve(
+    {
+      port: 0,
+      hostname: host,
+      signal: controller.signal,
+      onListen: ({ port: actualPort }) => {
+        console.error(
+          `Aves MCP HTTP server listening on ${host}:${actualPort}`,
+        );
+        resolvePort(actualPort);
+      },
     },
-  }, (req: Request) => {
-    return transport.handleRequest(req);
-  });
+    (req: Request) => {
+      return transport.handleRequest(req);
+    },
+  );
 
   return { port: await portPromise };
 }
@@ -688,21 +706,20 @@ export async function startServer() {
         case "query_runs":
           return await handleQueryRuns(args ?? {});
         default:
-          throw new McpError(
-            ErrorCode.MethodNotFound,
-            `Unknown tool: ${name}`,
-          );
+          throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
       }
     },
   );
 
   const transport = new StdioServerTransport();
   server.setRequestHandler(ListPromptsRequestSchema, () => ({
-    prompts: [{
-      name: AVES_PROMPT_NAME,
-      description: AVES_PROMPT_DESCRIPTION,
-      arguments: [],
-    }],
+    prompts: [
+      {
+        name: AVES_PROMPT_NAME,
+        description: AVES_PROMPT_DESCRIPTION,
+        arguments: [],
+      },
+    ],
   }));
 
   server.setRequestHandler(
@@ -710,10 +727,12 @@ export async function startServer() {
     async (req: { params: { name: string } }) => {
       if (req.params.name === AVES_PROMPT_NAME) {
         return {
-          messages: [{
-            role: "user",
-            content: { type: "text", text: await buildAvesPrompt() },
-          }],
+          messages: [
+            {
+              role: "user",
+              content: { type: "text", text: await buildAvesPrompt() },
+            },
+          ],
         };
       }
       throw new McpError(

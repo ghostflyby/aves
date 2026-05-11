@@ -113,8 +113,8 @@ SELECT * FROM runs WHERE code_hash = 'abc123' ORDER BY started_at DESC;
 
 - No `--allow-ffi`, `--allow-run` support (blocked by broker)
 - Import domains are pre-declared (deno.land, jsr.io, esm.sh, etc.)
-- Max script runtime: unbounded (Deno.Command has no timeout)
-- Env access is restricted to the whitelist: HOME, USER, PATH, TMPDIR, SHELL,
-  LANG, TERM
-- Syscalls are restricted to: hostname, osRelease, osUptime, loadavg,
-  memoryInfo, gid, uid, networkInterfaces
+- Script timeout configurable via `timeout_ms` parameter (default: no timeout)
+- Env vars outside the auto-allow list (HOME, USER, PATH, TMPDIR, SHELL, LANG,
+  TERM) require user approval — not blocked, just prompted
+- Syscalls outside the auto-allow list (hostname, osRelease, osUptime, loadavg,
+  memoryInfo, gid, uid, networkInterfaces) require user approval

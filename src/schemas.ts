@@ -21,6 +21,12 @@ const EvalRunRequestSchema = z.object({
   code: z.string().describe(ScriptFormatDescription),
   input: z.record(z.string(), z.unknown()).optional(),
   permissions: PermissionsSchema.optional(),
+  cwd: z.string().optional().describe(
+    "Working directory for the script (default: temp dir)",
+  ),
+  timeout_ms: z.number().int().positive().optional().describe(
+    "Timeout in milliseconds",
+  ),
 });
 
 const ModuleRunRequestSchema = z.object({
@@ -29,6 +35,12 @@ const ModuleRunRequestSchema = z.object({
   modulePath: z.string(),
   input: z.record(z.string(), z.unknown()).optional(),
   permissions: PermissionsSchema.optional(),
+  cwd: z.string().optional().describe(
+    "Working directory for the script (default: temp dir)",
+  ),
+  timeout_ms: z.number().int().positive().optional().describe(
+    "Timeout in milliseconds",
+  ),
 });
 
 export const RunRequestSchema = z.discriminatedUnion("mode", [

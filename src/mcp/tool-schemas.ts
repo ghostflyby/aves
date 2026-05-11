@@ -21,6 +21,12 @@ export const RunScriptInputSchema = z.object({
     "Input arguments for the script",
   ).optional(),
   permissions: PermissionsSchema.optional().describe("Permission overrides"),
+  cwd: z.string().optional().describe(
+    "Working directory for the script (default: temp dir)",
+  ),
+  timeout_ms: z.number().int().positive().optional().describe(
+    "Timeout in milliseconds",
+  ),
 });
 
 export const RunSkillInputSchema = z.object({
@@ -29,6 +35,12 @@ export const RunSkillInputSchema = z.object({
     .describe("Input arguments for the skill"),
   permissions: PermissionsSchema.optional()
     .describe("Permission overrides (can only shrink)"),
+  cwd: z.string().optional().describe(
+    "Working directory for the script (default: skill dir)",
+  ),
+  timeout_ms: z.number().int().positive().optional().describe(
+    "Timeout in milliseconds",
+  ),
 });
 
 export const SuggestSkillsInputSchema = z.object({
