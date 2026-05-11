@@ -499,6 +499,7 @@ export async function startHttpServer(
       capabilities: {
         tools: {},
         resources: {},
+        prompts: {},
         experimental: { "codex/sandbox-state-meta": {} },
       },
     },
@@ -628,6 +629,7 @@ export async function startServer() {
       capabilities: {
         tools: {},
         resources: {},
+        prompts: {},
         experimental: { "codex/sandbox-state-meta": {} },
       },
     },
