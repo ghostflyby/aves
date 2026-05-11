@@ -11,7 +11,12 @@ import { startBroker } from "./broker.ts";
 import type { SandboxState } from "./sandbox-state.ts";
 import { loadScriptApproval } from "./run-store.ts";
 import { loadPermissionModule } from "./permission-loader.ts";
-import { trackProcess, untrackProcess } from "./proc-tracker.ts";
+/**
+ * Global abort signal — aborted on server shutdown.
+ * Each script run creates a child controller linked to this one,
+ * so all spawned Deno subprocesses are killed when Aves exits.
+ */
+export const globalAbort = new AbortController();
 
 const BOOT_PATH = new URL("./boot.ts", import.meta.url).pathname;
 
@@ -290,45 +295,45 @@ async function runModuleInSandbox(
   }
 
   // Spawn the child Deno process
+  // Create a child AbortController linked to the global one.
+  // When Aves shuts down, all running subprocesses are aborted.
+  const runAc = new AbortController();
+  const onGlobalAbort = () => runAc.abort(new Error("server shutting down"));
+  globalAbort.signal.addEventListener("abort", onGlobalAbort);
+
   const proc = spawnDenoWithBroker(
     realModulePath,
     realCwd,
     ioDir,
     brokerPath,
   );
-  trackProcess(proc);
 
-  // Wait with optional timeout
+  // Kill the child process when aborted (timeout or shutdown)
+  runAc.signal.addEventListener("abort", () => {
+    try { proc.kill("SIGKILL"); } catch { /* already dead */ }
+  });
+
+  // Optional user-specified timeout
+  if (timeoutMs && timeoutMs > 0) {
+    setTimeout(() => runAc.abort(new Error("Script timed out")), timeoutMs);
+  }
+
   let exitCode = 0;
   let stdoutBytes = new Uint8Array();
   let stderrBytes = new Uint8Array();
   try {
-    if (timeoutMs && timeoutMs > 0) {
-      const result = await Promise.race([
-        proc.output(),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("Script timed out")), timeoutMs)
-        ),
-      ]);
-      exitCode = result.code;
-      stdoutBytes = result.stdout;
-      stderrBytes = result.stderr;
-    } else {
-      const result = await proc.output();
-      exitCode = result.code;
-      stdoutBytes = result.stdout;
-      stderrBytes = result.stderr;
-    }
+    const result = await proc.output();
+    exitCode = result.code;
+    stdoutBytes = result.stdout;
+    stderrBytes = result.stderr;
   } catch (err) {
-    try {
-      proc.kill("SIGKILL");
-    } catch { /* already dead */ }
-    try {
-      await proc.output();
-    } catch { /* ignore */ }
+    if (!runAc.signal.aborted) {
+      runAc.abort(err);
+    }
+    try { await proc.output(); } catch { /* ignore */ }
     throw err;
   } finally {
-    untrackProcess(proc);
+    globalAbort.signal.removeEventListener("abort", onGlobalAbort);
   }
 
   const finishedAt = new Date();
