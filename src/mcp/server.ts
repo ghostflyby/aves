@@ -36,7 +36,6 @@ import { extractSandboxState } from "../sandbox-state.ts";
 import {
   loadPermissionApproval,
   savePermissionApproval,
-  saveScriptApproval,
 } from "../run-store.ts";
 import type { ElicitResolver, PermissionRequest } from "../broker.ts";
 import type { SandboxState } from "../sandbox-state.ts";
@@ -262,11 +261,9 @@ async function handleRunSkill(args: Record<string, unknown>, meta: unknown) {
     );
   }
 
-  // Read mod.ts and compute hash
-  let codeHash: string;
+  // Verify mod.ts exists
   try {
-    const modContent = await Deno.readTextFile(`${skill_path}/mod.ts`);
-    codeHash = await sha256Hex(modContent);
+    await Deno.stat(`${skill_path}/mod.ts`);
   } catch {
     throw new McpError(
       ErrorCode.InvalidParams,
@@ -333,21 +330,11 @@ async function handleRunSkill(args: Record<string, unknown>, meta: unknown) {
   // Extract Codex sandbox state (informational only)
   const sandboxState = extractSandboxState(meta);
 
-  // Build inline elicitation handler
+  // Build inline elicitation handler — manual approvals never create hash trust
   const onElicit = async (req: PermissionRequest, resolve: ElicitResolver) => {
     const msg = formatElicitMessage(req, sandboxState);
     const response = await elicitRequest(msg);
-    const approved = isElicitationApproved(response);
-    if (approved) {
-      try {
-        await saveScriptApproval({
-          codeHash,
-          approvedAt: new Date().toISOString(),
-          permissions: {},
-        });
-      } catch { /* best-effort */ }
-    }
-    await resolve(approved);
+    await resolve(isElicitationApproved(response));
   };
 
   const result = await executeSkillRun(skill_path, input ?? {}, {
