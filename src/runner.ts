@@ -129,6 +129,13 @@ function isDefaultAllowed(
       const reqHost = req.value.split(":")[0];
       return BROKER_NET_ALLOW.some((d) => reqHost === d);
     }
+    case "import": {
+      const reqHost = req.value.split(":")[0];
+      return DEFAULT_IMPORT_DOMAINS.some((d) => {
+        const allowedHost = d.split(":")[0];
+        return reqHost === allowedHost;
+      });
+    }
     default:
       return false;
   }
@@ -152,6 +159,7 @@ function pathMatches(allowed: string, requested: string): boolean {
 // is elicited so the user has final say):
 //
 //   default allowed (tmp, safe sys/env, import domains) → allow
+//   import not in built-in list → hard deny (no permModule override)
 //   permission module (skill mod.permission.ts) → allow/deny/null
 //   extra dirs (run dir, module dir, cwd) → allow
 //   read-only without ceiling → allow
@@ -184,6 +192,13 @@ function createRunBrokerPolicy(
 
       // 1. Default allowed (safe sys, env, tmp, import domains)
       if (isDefaultAllowed(resolvedReq)) return "allow";
+
+      // 1a. Import not in built-in list → hard deny (no permModule override)
+      if (resolvedReq.permission === "import") {
+        return {
+          deny: "import from this domain is not in the built-in allowlist",
+        };
+      }
 
       // 2. Permission module (skill mod.permission.ts) — user's rules override everything below
       if (permModule) {
