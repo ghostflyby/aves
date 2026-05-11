@@ -85,31 +85,6 @@ export async function listRunsFiltered(
 }
 
 // ============================================================
-// Script approvals (hash-based trust for eval/module runs)
-// ============================================================
-
-export interface ScriptApproval {
-  codeHash: string;
-  approvedAt: string;
-  permissions: Record<string, string[]>;
-}
-
-export async function saveScriptApproval(
-  approval: ScriptApproval,
-): Promise<void> {
-  await callWorker("saveScriptApproval", approval);
-}
-
-export async function loadScriptApproval(
-  codeHash: string,
-): Promise<ScriptApproval | null> {
-  return await callWorker<ScriptApproval | null>(
-    "loadScriptApproval",
-    codeHash,
-  );
-}
-
-// ============================================================
 // Permission approvals (skill permission module trust)
 // ============================================================
 
@@ -132,8 +107,4 @@ export async function loadPermissionApproval(
     "loadPermissionApproval",
     skillDir,
   );
-}
-
-export async function removeScriptApproval(codeHash: string): Promise<void> {
-  await callWorker("removeScriptApproval", codeHash);
 }

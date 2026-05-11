@@ -33,7 +33,6 @@ import {
   ListRunsInputSchema,
   PromoteToSkillInputSchema,
   QueryRunsInputSchema,
-  ReplayRunInputSchema,
   RunScriptInputSchema,
   RunSkillInputSchema,
   SuggestSkillsInputSchema,
@@ -57,13 +56,6 @@ const RUN_SCRIPT_TOOL = {
     'Execute a TypeScript module in a sandboxed Deno subprocess. Script format: export default async function main(input: unknown) { ... } — the default export receives the `input` object and is awaited. Optionally export `inputSchema` (Zod@4 schema) for runtime input validation. Supports `import { z } from "zod"`, Deno built-ins, and node:compat libraries (node:fs, node:path, node:os). ES module format only. Use mode: "eval" with inline code, or mode: "module" with a modulePath. Runs with --no-',
   inputSchema: RunScriptInputSchema.toJSONSchema(),
   annotations: { destructiveHint: true },
-};
-
-const REPLAY_RUN_TOOL = {
-  name: "replay_run",
-  description: "Replay a previous run by ID",
-  inputSchema: ReplayRunInputSchema.toJSONSchema(),
-  annotations: { readOnlyHint: true },
 };
 
 const LIST_RUNS_TOOL = {
@@ -119,15 +111,6 @@ let _mcpServer: Server | null = null;
 // Elicitation helpers
 // ============================================================
 
-async function sha256Hex(input: string): Promise<string> {
-  const enc = new TextEncoder();
-  const data = enc.encode(input);
-  const hash = await crypto.subtle.digest("SHA-256", data);
-  return Array.from(new Uint8Array(hash))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
-
 let _elicitLock: Promise<void> = Promise.resolve();
 
 async function withElicitLock<T>(fn: () => Promise<T>): Promise<T> {
@@ -181,6 +164,14 @@ function formatElicitMessage(
   return `${permLabel} permission requested:\n\n  ${req.value}\n\nApprove?`;
 }
 
+async function sha256Hex(input: string): Promise<string> {
+  const enc = new TextEncoder();
+  const data = enc.encode(input);
+  const hash = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(hash))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
 function isElicitationApproved(result: unknown): boolean {
   const r = result as Record<string, unknown>;
   return r?.action === "accept";
@@ -215,26 +206,6 @@ async function handleRunScript(args: Record<string, unknown>, meta: unknown) {
     onElicit,
   );
   await saveRun(record);
-  return { content: [{ type: "text", text: JSON.stringify(record, null, 2) }] };
-}
-
-async function handleReplayRun(args: Record<string, unknown>) {
-  const parsed = ReplayRunInputSchema.safeParse(args);
-  if (!parsed.success) {
-    throw new McpError(
-      ErrorCode.InvalidParams,
-      parsed.error.issues.map((i) => i.message).join("; "),
-    );
-  }
-
-  const record = await loadRun(parsed.data.run_id);
-  if (!record) {
-    throw new McpError(
-      ErrorCode.InvalidParams,
-      `Run not found: ${parsed.data.run_id}`,
-    );
-  }
-
   return { content: [{ type: "text", text: JSON.stringify(record, null, 2) }] };
 }
 
@@ -543,7 +514,6 @@ export async function startHttpServer(
   mcpServer.setRequestHandler(ListToolsRequestSchema, () => ({
     tools: [
       RUN_SCRIPT_TOOL,
-      REPLAY_RUN_TOOL,
       LIST_RUNS_TOOL,
       RUN_SKILL_TOOL,
       SUGGEST_SKILLS_TOOL,
@@ -562,8 +532,6 @@ export async function startHttpServer(
           const meta = (request.params as Record<string, unknown>)?._meta;
           return await handleRunScript(args ?? {}, meta);
         }
-        case "replay_run":
-          return await handleReplayRun(args ?? {});
         case "list_runs":
           return await handleListRuns();
         case "run_skill": {
@@ -671,7 +639,6 @@ export async function startServer() {
   server.setRequestHandler(ListToolsRequestSchema, () => ({
     tools: [
       RUN_SCRIPT_TOOL,
-      REPLAY_RUN_TOOL,
       LIST_RUNS_TOOL,
       RUN_SKILL_TOOL,
       SUGGEST_SKILLS_TOOL,
@@ -691,8 +658,6 @@ export async function startServer() {
           const meta = (request.params as Record<string, unknown>)?._meta;
           return await handleRunScript(args ?? {}, meta);
         }
-        case "replay_run":
-          return await handleReplayRun(args ?? {});
         case "list_runs":
           return await handleListRuns();
         case "run_skill": {

@@ -5,11 +5,7 @@
 
 import { DatabaseSync } from "node:sqlite";
 import { getAvesDbPath } from "./paths.ts";
-import {
-  PERMISSION_APPROVALS_TABLE_DDL,
-  RUNS_TABLE_DDL,
-  SCRIPT_APPROVALS_TABLE_DDL,
-} from "./db-schema.ts";
+import { PERMISSION_APPROVALS_TABLE_DDL, RUNS_TABLE_DDL } from "./db-schema.ts";
 
 // ============================================================
 // Database initialization
@@ -20,11 +16,6 @@ const db = new DatabaseSync(getAvesDbPath());
 db.exec("PRAGMA journal_mode=WAL");
 
 db.exec(RUNS_TABLE_DDL);
-try {
-  db.exec(SCRIPT_APPROVALS_TABLE_DDL);
-} catch {
-  // DB may be read-only (e.g., test environment)
-}
 try {
   db.exec(PERMISSION_APPROVALS_TABLE_DDL);
 } catch {
@@ -39,38 +30,13 @@ db.exec("CREATE INDEX IF NOT EXISTS idx_runs_started_at ON runs(started_at)");
 // Row serialization helpers
 // ============================================================
 
-function toJson(val: unknown): string | null {
-  if (val === undefined || val === null) return null;
-  return typeof val === "string" ? val : JSON.stringify(val);
-}
-
-function fromJson(val: unknown): unknown {
-  if (val === null || val === undefined) return undefined;
-  if (typeof val === "string") {
-    try {
-      return JSON.parse(val);
-    } catch {
-      return val;
-    }
-  }
-  return val;
-}
-
 function rowToRecord(row: Record<string, unknown>): Record<string, unknown> {
   return {
     run_id: row.run_id as string,
     mode: row.mode as string,
     code_hash: row.code_hash as string | undefined,
-    raw_input: fromJson(row.raw_input) as Record<string, unknown> | undefined,
-    parsed_input: fromJson(row.parsed_input) as
-      | Record<string, unknown>
-      | undefined,
-    stdout: row.stdout as string,
-    stderr: row.stderr as string,
-    exit_code: row.exit_code as number | null,
-    output: fromJson(row.output),
-    error: row.error as string | undefined,
     started_at: row.started_at as string,
+    exit_code: row.exit_code as number | null,
     finished_at: row.finished_at as string,
     duration_ms: row.duration_ms as number,
     code: row.code as string | undefined,
@@ -85,20 +51,13 @@ const handlers: Record<string, (...args: unknown[]) => unknown> = {
   saveRun(...recordArr: unknown[]) {
     const r = recordArr[0] as Record<string, unknown>;
     db.prepare(`INSERT OR REPLACE INTO runs
-      (run_id, mode, code_hash, raw_input, parsed_input,
-       stdout, stderr, exit_code, output, error,
+      (run_id, mode, code_hash, exit_code,
        started_at, finished_at, duration_ms, code)
-      VALUES (?,?,?,?,?, ?,?,?,?,?, ?,?,?,?)`).run(
+      VALUES (?,?,?,?, ?,?,?,?)`).run(
       r.run_id,
       r.mode,
       r.code_hash ?? null,
-      toJson(r.raw_input),
-      toJson(r.parsed_input),
-      r.stdout ?? "",
-      r.stderr ?? "",
       r.exit_code,
-      toJson(r.output),
-      r.error ?? null,
       r.started_at,
       r.finished_at,
       r.duration_ms,
@@ -160,38 +119,6 @@ const handlers: Record<string, (...args: unknown[]) => unknown> = {
     )).map(rowToRecord);
   },
 
-  saveScriptApproval(...approvalArr: unknown[]) {
-    const approval = approvalArr[0] as {
-      codeHash: string;
-      approvedAt: string;
-      permissions: Record<string, string[]>;
-    };
-    db.prepare(
-      `INSERT OR REPLACE INTO script_approvals (code_hash, approved_at, permissions_json) VALUES (?, ?, ?)`,
-    ).run(
-      approval.codeHash,
-      approval.approvedAt,
-      JSON.stringify(approval.permissions),
-    );
-    return null;
-  },
-
-  loadScriptApproval(...codeHashArr: unknown[]) {
-    const codeHash = codeHashArr[0] as string;
-    const row = db.prepare(
-      "SELECT code_hash, approved_at, permissions_json FROM script_approvals WHERE code_hash = ?",
-    ).get(codeHash) as Record<string, unknown> | undefined;
-    if (!row) return null;
-    return {
-      codeHash: row.code_hash as string,
-      approvedAt: row.approved_at as string,
-      permissions: JSON.parse(row.permissions_json as string) as Record<
-        string,
-        string[]
-      >,
-    };
-  },
-
   savePermissionApproval(...approvalArr: unknown[]) {
     const a = approvalArr[0] as Record<string, string>;
     db.prepare(
@@ -211,14 +138,6 @@ const handlers: Record<string, (...args: unknown[]) => unknown> = {
       permissionHash: row.permission_hash as string,
       approvedAt: row.approved_at as string,
     };
-  },
-
-  removeScriptApproval(...codeHashArr: unknown[]) {
-    const codeHash = codeHashArr[0] as string;
-    db.prepare("DELETE FROM script_approvals WHERE code_hash = ?").run(
-      codeHash,
-    );
-    return null;
   },
 };
 

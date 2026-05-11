@@ -6,10 +6,6 @@ import { PermissionsSchema } from "../schemas.ts";
  * Runtime validation still uses the stricter RunRequestSchema in schemas.ts.
  */
 
-export const ReplayRunInputSchema = z.object({
-  run_id: z.string().describe("Run ID to replay"),
-});
-
 export const RunScriptInputSchema = z.object({
   mode: z.enum(["eval", "module"]).describe("Script execution mode"),
   code: z.string().describe(
@@ -88,7 +84,6 @@ export const QueryRunsInputSchema = z.object({
 });
 
 // Inferred types
-export type ReplayRunInput = z.infer<typeof ReplayRunInputSchema>;
 export type RunSkillInput = z.infer<typeof RunSkillInputSchema>;
 export type SuggestSkillsInput = z.infer<typeof SuggestSkillsInputSchema>;
 export type PromoteToSkillInput = z.infer<typeof PromoteToSkillInputSchema>;

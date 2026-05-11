@@ -9,7 +9,6 @@ import type {
 } from "./broker.ts";
 import { startBroker } from "./broker.ts";
 import type { SandboxState } from "./sandbox-state.ts";
-import { loadScriptApproval } from "./run-store.ts";
 import { loadPermissionModule } from "./permission-loader.ts";
 /**
  * Global abort signal — aborted on server shutdown.
@@ -154,7 +153,6 @@ function pathMatches(allowed: string, requested: string): boolean {
 //   default allowed (tmp, safe sys/env, import domains) → allow
 //   permission module (skill mod.permission.ts) → allow/deny/null
 //   extra dirs (run dir, module dir, cwd) → allow
-//   hash trust (previously approved same-hash script) → allow
 //   read-only without ceiling → allow
 //   everything else → elicit
 // ============================================================
@@ -205,14 +203,6 @@ function createRunBrokerPolicy(
           resolvedReq.permission === "write") &&
         ctx.extraDirs.some((d) => pathMatches(d + "/", resolvedValue))
       ) return "allow";
-
-      // 4. Hash trust — only for skills (gated by mod.permission.ts approval)
-      if (skillDir && ctx.codeHash) {
-        try {
-          const prev = await loadScriptApproval(ctx.codeHash);
-          if (prev) return "allow";
-        } catch { /* DB error, fall through to elicit */ }
-      }
 
       // 5. Read-only with no ceiling → allow silently
       if (!ctx.codexCeiling && resolvedReq.permission === "read") {
@@ -372,13 +362,6 @@ async function runModuleInSandbox(
       error = stderr || "Process exited with non-zero code";
     }
   }
-
-  let parsedInput: Record<string, unknown> | undefined;
-  try {
-    parsedInput = JSON.parse(
-      await Deno.readTextFile(`${realIoDir}/parsed_input.json`),
-    );
-  } catch { /* no-op */ }
   try {
     await Deno.remove(ioDir, { recursive: true });
   } catch { /* best-effort */ }
@@ -387,18 +370,16 @@ async function runModuleInSandbox(
     run_id: runId,
     mode,
     code_hash: undefined,
-    raw_input: input,
-    parsed_input: parsedInput,
+    exit_code: exitCode,
     stdout,
     stderr,
-    exit_code: exitCode,
     output,
     error,
     started_at: startedAtStr,
     finished_at: finishedAtStr,
     duration_ms: durationMs,
     code: undefined,
-  };
+  } as RunRecord;
 }
 
 // ============================================================

@@ -52,13 +52,11 @@ export const RunRecordSchema = z.object({
   run_id: z.string(),
   mode: ScriptModeSchema,
   code_hash: z.string().optional(),
-  raw_input: z.record(z.string(), z.unknown()).optional(),
-  parsed_input: z.record(z.string(), z.unknown()).optional(),
-  stdout: z.string(),
-  stderr: z.string(),
   exit_code: z.number().nullable(),
-  output: z.unknown(),
-  error: z.string().optional(),
+  stdout: z.string().optional(), // runtime only — not persisted
+  stderr: z.string().optional(), // runtime only — not persisted
+  output: z.unknown().optional(), // runtime only — not persisted
+  error: z.string().optional(), // runtime only — not persisted
   started_at: z.string(),
   finished_at: z.string(),
   duration_ms: z.number(),

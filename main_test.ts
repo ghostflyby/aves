@@ -93,7 +93,6 @@ Deno.test("run-store - save and load", async () => {
   const record: RunRecord = {
     run_id: "test-run-001",
     mode: "eval",
-    stdout: "",
     stderr: "",
     exit_code: 0,
     output: { ok: true },
@@ -116,7 +115,7 @@ Deno.test("run-store - save and load", async () => {
   try {
     await Deno.remove("/tmp/aves-test-runstore", { recursive: true });
   } catch {
-    _; /* skip */
+    void 0; /* skip */
   }
   if (prevData) Deno.env.set("AVES_DATA_DIR", prevData);
   else Deno.env.delete("AVES_DATA_DIR");
@@ -131,7 +130,7 @@ Deno.test("run-store - list runs", async () => {
   try {
     await Deno.remove("/tmp/aves-test-runstore2", { recursive: true });
   } catch {
-    _; /* skip */
+    void 0; /* skip */
   }
   if (prevData) Deno.env.set("AVES_DATA_DIR", prevData);
   else Deno.env.delete("AVES_DATA_DIR");

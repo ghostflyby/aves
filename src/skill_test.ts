@@ -10,8 +10,6 @@ const TEST_RUN: RunRecord = {
   run_id: "test-promote-001",
   mode: "eval",
   code_hash: "abc123",
-  raw_input: { text: "hello" },
-  parsed_input: { text: "hello" },
   stdout: "",
   stderr: "",
   exit_code: 0,
