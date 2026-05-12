@@ -62,6 +62,7 @@ function spawnDenoWithBroker(
     BOOT_PATH,
     modulePath,
   ];
+
   const cmd = new Deno.Command("deno", {
     args,
     cwd: scriptCwd,
@@ -242,7 +243,7 @@ function createRunBrokerPolicy(
 async function runModuleInSandbox(
   runId: string,
   modulePath: string,
-  input: Record<string, unknown>,
+  input: unknown,
   _granted: Permissions,
   _userPerms: Permissions,
   _denied: string[],
@@ -265,7 +266,7 @@ async function runModuleInSandbox(
 
   await Deno.writeTextFile(
     `${ioDir}/input.json`,
-    JSON.stringify(input),
+    JSON.stringify(input ?? null),
   );
 
   const realCwd = scriptCwd ? await Deno.realPath(scriptCwd) : ioDir;
@@ -492,7 +493,7 @@ export interface SkillRunResult {
 
 export async function executeSkillRun(
   skillDir: string,
-  input: Record<string, unknown>,
+  input: unknown,
   options?: {
     policy?: ServerPolicy;
     permissionsOverride?: Permissions;

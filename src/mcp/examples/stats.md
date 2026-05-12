@@ -7,17 +7,14 @@ Compute basic statistics: mean, median, min, max.
 ```ts
 import { z } from "zod";
 
-export const inputSchema = z.object({
-  numbers: z.array(z.number()).describe("Array of numbers"),
-});
+export const inputSchema = z.array(z.number()).describe("Array of numbers");
 
 export default async function main(input: z.infer<typeof inputSchema>) {
-  const n = input.numbers;
-  const sorted = [...n].sort((a, b) => a - b);
+  const sorted = [...input].sort((a, b) => a - b);
   return {
-    count: n.length,
-    sum: n.reduce((a, b) => a + b, 0),
-    mean: n.reduce((a, b) => a + b, 0) / n.length,
+    count: input.length,
+    sum: input.reduce((a, b) => a + b, 0),
+    mean: input.reduce((a, b) => a + b, 0) / input.length,
     median: sorted[Math.floor(sorted.length / 2)],
     min: sorted[0],
     max: sorted[sorted.length - 1],
@@ -28,7 +25,7 @@ export default async function main(input: z.infer<typeof inputSchema>) {
 ## Input
 
 ```json
-{ "numbers": [3, 1, 4, 1, 5, 9] }
+[3, 1, 4, 1, 5, 9]
 ```
 
 ## Output

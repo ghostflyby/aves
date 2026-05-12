@@ -7,12 +7,10 @@ Parse CSV text into JSON arrays.
 ```ts
 import { z } from "zod";
 
-export const inputSchema = z.object({
-  csv: z.string().describe("CSV text with header row"),
-});
+export const inputSchema = z.string().describe("CSV text with header row");
 
 export default async function main(input: z.infer<typeof inputSchema>) {
-  const lines = input.csv.trim().split("\n");
+  const lines = input.trim().split("\n");
   const headers = lines[0].split(",").map((h) => h.trim());
   return lines.slice(1).map((line) => {
     const vals = line.split(",").map((v) => v.trim());
@@ -24,7 +22,7 @@ export default async function main(input: z.infer<typeof inputSchema>) {
 ## Input
 
 ```json
-{ "csv": "name,score\nAlice,95\nBob,87" }
+"name,score\nAlice,95\nBob,87"
 ```
 
 ## Output

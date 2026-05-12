@@ -7,12 +7,10 @@ Compute SHA-256 hash of input text.
 ```ts
 import { z } from "zod";
 
-export const inputSchema = z.object({
-  text: z.string().describe("Text to hash"),
-});
+export const inputSchema = z.string().describe("Text to hash");
 
 export default async function main(input: z.infer<typeof inputSchema>) {
-  const data = new TextEncoder().encode(input.text);
+  const data = new TextEncoder().encode(input);
   const hash = await crypto.subtle.digest("SHA-256", data);
   return {
     hex: Array.from(new Uint8Array(hash)).map((b) =>
@@ -25,7 +23,7 @@ export default async function main(input: z.infer<typeof inputSchema>) {
 ## Input
 
 ```json
-{ "text": "hello" }
+"hello"
 ```
 
 ## Output

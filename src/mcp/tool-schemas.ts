@@ -13,7 +13,7 @@ export const RunScriptInputSchema = z.object({
   ).optional(),
   modulePath: z.string().describe("Path to external module file (module mode)")
     .optional(),
-  input: z.record(z.string(), z.unknown()).describe(
+  input: z.unknown().describe(
     "Input arguments for the script",
   ).optional(),
   permissions: PermissionsSchema.optional().describe("Permission overrides"),
@@ -27,7 +27,7 @@ export const RunScriptInputSchema = z.object({
 
 export const RunSkillInputSchema = z.object({
   skill_path: z.string().describe("Path to the skill directory"),
-  input: z.record(z.string(), z.unknown()).optional()
+  input: z.unknown().optional()
     .describe("Input arguments for the skill"),
   permissions: PermissionsSchema.optional()
     .describe("Permission overrides (can only shrink)"),

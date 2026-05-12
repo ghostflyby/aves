@@ -19,7 +19,7 @@ const ScriptFormatDescription =
 const EvalRunRequestSchema = z.object({
   mode: z.literal("eval"),
   code: z.string().describe(ScriptFormatDescription),
-  input: z.record(z.string(), z.unknown()).optional(),
+  input: z.unknown().optional(),
   permissions: PermissionsSchema.optional(),
   cwd: z.string().optional().describe(
     "Working directory for the script (default: temp dir)",
@@ -33,7 +33,7 @@ const ModuleRunRequestSchema = z.object({
   mode: z.literal("module"),
   code: z.string().describe(ScriptFormatDescription).optional(),
   modulePath: z.string(),
-  input: z.record(z.string(), z.unknown()).optional(),
+  input: z.unknown().optional(),
   permissions: PermissionsSchema.optional(),
   cwd: z.string().optional().describe(
     "Working directory for the script (default: temp dir)",

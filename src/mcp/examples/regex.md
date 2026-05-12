@@ -7,13 +7,13 @@ Extract structured data from text using regular expressions.
 ```ts
 import { z } from "zod";
 
-export const inputSchema = z.object({
-  text: z.string().describe("Text to search for emails and URLs"),
-});
+export const inputSchema = z.string().describe(
+  "Text to search for emails and URLs",
+);
 
 export default async function main(input: z.infer<typeof inputSchema>) {
-  const emails = input.text.match(/[\w.-]+@[\w.-]+\.\w+/g) || [];
-  const urls = input.text.match(/https?:\/\/[^\s]+/g) || [];
+  const emails = input.match(/[\w.-]+@[\w.-]+\.\w+/g) || [];
+  const urls = input.match(/https?:\/\/[^\s]+/g) || [];
   return { emails, urls };
 }
 ```
@@ -21,7 +21,7 @@ export default async function main(input: z.infer<typeof inputSchema>) {
 ## Input
 
 ```json
-{ "text": "Contact alice@example.com or visit https://example.com" }
+"Contact alice@example.com or visit https://example.com"
 ```
 
 ## Output

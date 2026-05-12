@@ -8,12 +8,10 @@ Parse YAML files into structured JSON using `jsr:@std/yaml`.
 import { z } from "zod";
 import { parse } from "jsr:@std/yaml@1";
 
-export const inputSchema = z.object({
-  yaml: z.string().describe("YAML text to parse"),
-});
+export const inputSchema = z.string().describe("YAML text to parse");
 
 export default async function main(input: z.infer<typeof inputSchema>) {
-  const parsed = parse(input.yaml);
+  const parsed = parse(input);
   return { data: parsed };
 }
 ```
