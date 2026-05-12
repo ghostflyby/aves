@@ -8,6 +8,8 @@ import {
   releaseLock,
 } from "./src/server-registry.ts";
 import { closeDb } from "./src/run-store.ts";
+// Force resolution of @modelcontextprotocol/server peer dependency
+import "@cfworker/json-schema";
 import { disposePool } from "./src/mcp/query-pool.ts";
 import { globalAbort } from "./src/runner.ts";
 
