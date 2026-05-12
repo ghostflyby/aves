@@ -21,7 +21,8 @@ Optionally export `inputSchema` (Zod@4) for runtime input validation:
 
 ```ts
 import { z } from "zod";
-export const inputSchema = z.object({ name: z.string() });
+
+export const inputSchema = z.string();
 export default async function main(input: z.infer<typeof inputSchema>) {
   throw new Error(input);
 }
@@ -54,9 +55,9 @@ Only skills with an approved `mod.permission.ts` get silent re-runs.
 
 ## Writing to files
 
-Scripts can write to their run directory silently. Writing elsewhere triggers a
-prompt. To write output that the agent can read back, write to the run directory
-and return the path, or write to a temp dir (auto-allowed) and return the path.
+Writing to non-default locations triggers a prompt. To write output that the
+agent can read back, write to the run directory and return the path, or write to
+a temp dir (auto-allowed) and return the path.
 
 ```ts
 export default async function main() {
@@ -133,8 +134,13 @@ Use `query_runs` for read-only SQL on past runs. The `runs` table schema is at
 `aves://schema/runs`. Examples:
 
 ```sql
-SELECT exit_code, COUNT(*) FROM runs GROUP BY exit_code;
-SELECT * FROM runs WHERE code_hash = 'abc123' ORDER BY started_at DESC;
+SELECT exit_code, COUNT(*)
+FROM runs
+GROUP BY exit_code;
+SELECT *
+FROM runs
+WHERE code_hash = 'abc123'
+ORDER BY started_at DESC;
 ```
 
 ## Limitations
