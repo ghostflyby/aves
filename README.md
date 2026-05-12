@@ -5,6 +5,25 @@ Every filesystem, network, environment, and system permission request is
 intercepted at runtime and routed to the user for approval — or handled silently
 via cryptographic hash trust.
 
+## Usage
+
+### Quick start (stdio)
+
+```bash
+deno run -A jsr:@ghostflyby/aves
+```
+
+### As an MCP server
+
+Add to `~/.codex/config.toml`:
+
+```toml
+[[mcp_servers]]
+name = "aves"
+command = "deno"
+args = ["run", "-A", "jsr:@ghostflyby/aves"]
+```
+
 ## How it works
 
 ```
@@ -43,7 +62,6 @@ user always has the final say.
 | ------------------ | ------------------------------------------------------------------------- |
 | `run_script`       | Execute inline TypeScript or a module path in a sandboxed Deno subprocess |
 | `run_skill`        | Execute a skill by its directory path                                     |
-| `replay_run`       | Replay a previous run by ID                                               |
 | `list_runs`        | List recent run records with filtering                                    |
 | `query_runs`       | Read-only SQL queries against the run database                            |
 | `list_skills`      | List all discovered skills in configured roots                            |
@@ -170,7 +188,6 @@ Three SQLite tables:
 | Table                  | Purpose                                                                               |
 | ---------------------- | ------------------------------------------------------------------------------------- |
 | `runs`                 | Execution records (14 columns: id, mode, hash, input, output, exit_code, timestamps…) |
-| `script_approvals`     | Hash trust for previously approved skill code hashes                                  |
 | `permission_approvals` | Hash trust for `mod.permission.ts` per skill directory                                |
 
 ## License
