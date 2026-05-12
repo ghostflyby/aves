@@ -1,34 +1,25 @@
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { RUNS_TABLE_DDL } from "../db-schema.ts";
 import {
-  type CallToolRequest,
-  CallToolRequestSchema,
-  ErrorCode,
-  GetPromptRequestSchema,
-  ListPromptsRequestSchema,
-  ListResourcesRequestSchema,
-  ListResourceTemplatesRequestSchema,
-  ListToolsRequestSchema,
-  McpError,
-  ReadResourceRequestSchema,
-} from "@modelcontextprotocol/sdk/types.js";
-import { z } from "zod";
-import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
+  listRuns,
+  listRunsFiltered,
+  loadPermissionApproval,
+  loadRun,
+  savePermissionApproval,
+  saveRun,
+} from "../run-store.ts";
 import { executeRun, executeSkillRun } from "../runner.ts";
-import { listRuns, listRunsFiltered, loadRun, saveRun } from "../run-store.ts";
 import { RunRequestSchema } from "../schemas.ts";
-import {
-  handleListResources,
-  handleListResourceTemplates,
-  handleReadResource,
-} from "./resources.ts";
+import { listSkills, promoteRunToSkill } from "../skill.ts";
 import {
   AVES_PROMPT_DESCRIPTION,
   AVES_PROMPT_NAME,
   buildAvesPrompt,
 } from "./prompt-handlers.ts";
-import { RUNS_TABLE_DDL } from "../db-schema.ts";
-import { listSkills, promoteRunToSkill } from "../skill.ts";
+import {
+  handleListResources,
+  handleListResourceTemplates,
+  handleReadResource,
+} from "./resources.ts";
 import {
   ListRunsInputSchema,
   PromoteToSkillInputSchema,
@@ -38,74 +29,25 @@ import {
   SuggestSkillsInputSchema,
 } from "./tool-schemas.ts";
 
-import { extractSandboxState } from "../sandbox-state.ts";
 import {
-  loadPermissionApproval,
-  savePermissionApproval,
-} from "../run-store.ts";
+  type CallToolResult,
+  type ElicitResult,
+  McpServer,
+  ProtocolError,
+  ProtocolErrorCode,
+  type ServerContext,
+  StdioServerTransport,
+  WebStandardStreamableHTTPServerTransport,
+} from "@modelcontextprotocol/server";
 import type { ElicitResolver, PermissionRequest } from "../broker.ts";
 import type { SandboxState } from "../sandbox-state.ts";
-
-// ============================================================
-// Tool definitions — inputSchema generated from Zod (single source of truth)
-// ============================================================
-
-const RUN_SCRIPT_TOOL = {
-  name: "run_script",
-  description:
-    'Execute a TypeScript module in a sandboxed Deno subprocess. Script format: export default async function main(input: unknown) { ... } — the default export receives the `input` object and is awaited. Optionally export `inputSchema` (Zod@4 schema) for runtime input validation. Supports `import { z } from "zod"`, `jsr:@scope/pkg@version`, `npm:pkg`, Deno built-ins, and node:compat (node:fs, node:path, node:os). ES module format only. Use mode: "eval" with inline code, or mode: "module" with a modulePath. Runs with --no-',
-  inputSchema: RunScriptInputSchema.toJSONSchema(),
-  annotations: { destructiveHint: true },
-};
-
-const LIST_RUNS_TOOL = {
-  name: "list_runs",
-  description: "List recent run records",
-  inputSchema: ListRunsInputSchema.toJSONSchema(),
-  annotations: { readOnlyHint: true },
-};
-
-const RUN_SKILL_TOOL = {
-  name: "run_skill",
-  description: "Execute a skill by its directory path",
-  inputSchema: RunSkillInputSchema.toJSONSchema(),
-  annotations: { destructiveHint: true },
-};
-
-const SUGGEST_SKILLS_TOOL = {
-  name: "suggest_skills",
-  description: "Find run clusters that look like skill candidates",
-  inputSchema: SuggestSkillsInputSchema.toJSONSchema(),
-  annotations: { readOnlyHint: true },
-};
-
-const PROMOTE_TO_SKILL_TOOL = {
-  name: "promote_to_skill",
-  description: "Promote a run to a skill, writing to disk",
-  inputSchema: PromoteToSkillInputSchema.toJSONSchema(),
-  annotations: { destructiveHint: true },
-};
-
-const LIST_SKILLS_TOOL = {
-  name: "list_skills",
-  description: "List all discovered skills in configured roots",
-  inputSchema: { type: "object" as const, properties: {} },
-  annotations: { readOnlyHint: true },
-};
-
-const QUERY_RUNS_TOOL = {
-  name: "query_runs",
-  description:
-    `Query Aves run records and skill approvals using read-only SQL (SELECT/PRAGMA only).\n\nTable schema:\n${RUNS_TABLE_DDL}`,
-  inputSchema: QueryRunsInputSchema.toJSONSchema(),
-  annotations: { readOnlyHint: true },
-};
+import { extractSandboxState } from "../sandbox-state.ts";
 
 // ============================================================
 // Module-level server reference — set by startup functions
 // ============================================================
 
-let _mcpServer: Server | null = null;
+let _mcpServer: McpServer | null = null;
 
 // ============================================================
 // Elicitation helpers
@@ -127,31 +69,25 @@ async function withElicitLock<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
-/** Send an elicitation/create request and return the raw result. */
-async function elicitRequest(msg: string): Promise<unknown> {
-  const server = _mcpServer;
-  if (!server) return { action: "reject" };
+/** Send an elicitation request and return the raw result. */
+async function elicitRequest(msg: string): Promise<ElicitResult> {
+  const mcpServer = _mcpServer;
+  if (!mcpServer) return { action: "decline" };
   return await withElicitLock(() =>
-    server.request(
-      {
-        method: "elicitation/create",
-        params: {
-          mode: "form",
-          message: msg,
-          requestedSchema: {
-            type: "object",
-            properties: {
-              approved: {
-                type: "boolean",
-                title: "Approve",
-                description: "Approve execution with the listed permissions",
-              },
-            },
+    mcpServer.server.elicitInput({
+      mode: "form",
+      message: msg,
+      requestedSchema: {
+        type: "object",
+        properties: {
+          approved: {
+            type: "boolean",
+            title: "Approve",
+            description: "Approve execution with the listed permissions",
           },
         },
       },
-      z.object({ action: z.string() }),
-    )
+    })
   );
 }
 
@@ -177,11 +113,14 @@ function isElicitationApproved(result: unknown): boolean {
   return r?.action === "accept";
 }
 
-async function handleRunScript(args: Record<string, unknown>, meta: unknown) {
+async function handleRunScript(
+  args: unknown,
+  ctx: ServerContext,
+): Promise<CallToolResult> {
   const result = RunRequestSchema.safeParse(args);
   if (!result.success) {
-    throw new McpError(
-      ErrorCode.InvalidParams,
+    throw new ProtocolError(
+      ProtocolErrorCode.InvalidParams,
       result.error.issues
         .map((i) => `${i.path.join(".")}: ${i.message}`)
         .join("; "),
@@ -189,7 +128,7 @@ async function handleRunScript(args: Record<string, unknown>, meta: unknown) {
   }
 
   // Extract Codex sandbox state (informational only — not a hard boundary)
-  const sandboxState = extractSandboxState(meta);
+  const sandboxState = extractSandboxState(ctx.mcpReq._meta);
 
   // Build inline elicitation handler — called by broker when a permission needs approval
   const onElicit = async (req: PermissionRequest, resolve: ElicitResolver) => {
@@ -206,24 +145,34 @@ async function handleRunScript(args: Record<string, unknown>, meta: unknown) {
     onElicit,
   );
   await saveRun(record);
-  return { content: [{ type: "text", text: JSON.stringify(record, null, 2) }] };
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(record, null, 2) }],
+  };
 }
 
-async function handleListRuns(args?: Record<string, unknown>) {
+async function handleListRuns(
+  args?: Record<string, unknown>,
+): Promise<CallToolResult> {
   const parsed = args ? ListRunsInputSchema.safeParse(args) : null;
   const records = parsed?.success
     ? await listRunsFiltered(parsed.data)
     : await listRuns();
   return {
-    content: [{ type: "text", text: JSON.stringify(records, null, 2) }],
+    content: [{
+      type: "text" as const,
+      text: JSON.stringify(records, null, 2),
+    }],
   };
 }
 
-async function handleRunSkill(args: Record<string, unknown>, meta: unknown) {
+async function handleRunSkill(
+  args: unknown,
+  ctx: ServerContext,
+): Promise<CallToolResult> {
   const parsed = RunSkillInputSchema.safeParse(args);
   if (!parsed.success) {
-    throw new McpError(
-      ErrorCode.InvalidParams,
+    throw new ProtocolError(
+      ProtocolErrorCode.InvalidParams,
       parsed.error.issues.map((i) => i.message).join("; "),
     );
   }
@@ -234,8 +183,8 @@ async function handleRunSkill(args: Record<string, unknown>, meta: unknown) {
   try {
     await Deno.stat(`${skill_path}/SKILL.md`);
   } catch {
-    throw new McpError(
-      ErrorCode.InvalidParams,
+    throw new ProtocolError(
+      ProtocolErrorCode.InvalidParams,
       `Not a skill directory (SKILL.md not found): ${skill_path}`,
     );
   }
@@ -244,8 +193,8 @@ async function handleRunSkill(args: Record<string, unknown>, meta: unknown) {
   try {
     await Deno.stat(`${skill_path}/mod.ts`);
   } catch {
-    throw new McpError(
-      ErrorCode.InvalidParams,
+    throw new ProtocolError(
+      ProtocolErrorCode.InvalidParams,
       `Skill entrypoint not found: ${skill_path}/mod.ts`,
     );
   }
@@ -302,7 +251,7 @@ async function handleRunSkill(args: Record<string, unknown>, meta: unknown) {
     return {
       content: [
         {
-          type: "text",
+          type: "text" as const,
           text: JSON.stringify({
             ok: false,
             error: "Permission module not approved",
@@ -313,7 +262,7 @@ async function handleRunSkill(args: Record<string, unknown>, meta: unknown) {
   }
 
   // Extract Codex sandbox state (informational only)
-  const sandboxState = extractSandboxState(meta);
+  const sandboxState = extractSandboxState(ctx.mcpReq._meta);
 
   // Build inline elicitation handler — manual approvals never create hash trust
   const onElicit = async (req: PermissionRequest, resolve: ElicitResolver) => {
@@ -329,23 +278,28 @@ async function handleRunSkill(args: Record<string, unknown>, meta: unknown) {
   });
 
   if (!result.record) {
-    throw new McpError(
-      ErrorCode.InternalError,
+    throw new ProtocolError(
+      ProtocolErrorCode.InternalError,
       "Skill execution failed: no record returned",
     );
   }
 
   await saveRun(result.record);
   return {
-    content: [{ type: "text", text: JSON.stringify(result.record, null, 2) }],
+    content: [{
+      type: "text" as const,
+      text: JSON.stringify(result.record, null, 2),
+    }],
   };
 }
 
-async function handleSuggestSkills(args: Record<string, unknown>) {
+async function handleSuggestSkills(
+  args: Record<string, unknown>,
+): Promise<CallToolResult> {
   const parsed = SuggestSkillsInputSchema.safeParse(args);
   if (!parsed.success) {
-    throw new McpError(
-      ErrorCode.InvalidParams,
+    throw new ProtocolError(
+      ProtocolErrorCode.InvalidParams,
       parsed.error.issues.map((i) => i.message).join("; "),
     );
   }
@@ -367,7 +321,7 @@ async function handleSuggestSkills(args: Record<string, unknown>) {
     return {
       content: [
         {
-          type: "text",
+          type: "text" as const,
           text: JSON.stringify({ suggestions: [], total_clusters: 0 }),
         },
       ],
@@ -386,7 +340,7 @@ async function handleSuggestSkills(args: Record<string, unknown>) {
   return {
     content: [
       {
-        type: "text",
+        type: "text" as const,
         text: JSON.stringify({
           suggestions,
           total_clusters: suggestions.length,
@@ -396,11 +350,13 @@ async function handleSuggestSkills(args: Record<string, unknown>) {
   };
 }
 
-async function handlePromoteToSkill(args: Record<string, unknown>) {
+async function handlePromoteToSkill(
+  args: Record<string, unknown>,
+): Promise<CallToolResult> {
   const parsed = PromoteToSkillInputSchema.safeParse(args);
   if (!parsed.success) {
-    throw new McpError(
-      ErrorCode.InvalidParams,
+    throw new ProtocolError(
+      ProtocolErrorCode.InvalidParams,
       parsed.error.issues.map((i) => i.message).join("; "),
     );
   }
@@ -408,12 +364,15 @@ async function handlePromoteToSkill(args: Record<string, unknown>) {
   const { run_id, name, description } = parsed.data;
   const run = await loadRun(run_id);
   if (!run) {
-    throw new McpError(ErrorCode.InvalidParams, `Run not found: ${run_id}`);
+    throw new ProtocolError(
+      ProtocolErrorCode.InvalidParams,
+      `Run not found: ${run_id}`,
+    );
   }
 
   const result = await promoteRunToSkill(run, name, description);
   if (!result.ok) {
-    throw new McpError(ErrorCode.InvalidParams, result.error);
+    throw new ProtocolError(ProtocolErrorCode.InvalidParams, result.error);
   }
 
   const lines = [
@@ -436,14 +395,16 @@ async function handlePromoteToSkill(args: Record<string, unknown>) {
   lines.push("- Edit mod.ts if the entrypoint needs changes");
   lines.push("- Add examples.json for sample input/output testing");
 
-  return { content: [{ type: "text", text: lines.join("\n") }] };
+  return { content: [{ type: "text" as const, text: lines.join("\n") }] };
 }
 
-async function handleQueryRuns(args?: Record<string, unknown>) {
+async function handleQueryRuns(
+  args?: Record<string, unknown>,
+): Promise<CallToolResult> {
   const parsed = args ? QueryRunsInputSchema.safeParse(args) : null;
   if (!parsed?.success) {
-    throw new McpError(
-      ErrorCode.InvalidParams,
+    throw new ProtocolError(
+      ProtocolErrorCode.InvalidParams,
       "query_runs requires valid params",
     );
   }
@@ -453,8 +414,8 @@ async function handleQueryRuns(args?: Record<string, unknown>) {
   const isSelect = /^SELECT\b/i.test(sql);
   const isPragma = /^PRAGMA\b/i.test(sql);
   if (!isSelect && !isPragma) {
-    throw new McpError(
-      ErrorCode.InvalidParams,
+    throw new ProtocolError(
+      ProtocolErrorCode.InvalidParams,
       "query_runs only allows SELECT and PRAGMA statements",
     );
   }
@@ -468,19 +429,131 @@ async function handleQueryRuns(args?: Record<string, unknown>) {
   );
 
   if (!result.ok) {
-    throw new McpError(ErrorCode.InternalError, result.error ?? "Query failed");
+    throw new ProtocolError(
+      ProtocolErrorCode.InternalError,
+      result.error ?? "Query failed",
+    );
   }
 
   return {
-    content: [{ type: "text", text: JSON.stringify(result.rows, null, 2) }],
+    content: [{
+      type: "text" as const,
+      text: JSON.stringify(result.rows, null, 2),
+    }],
   };
 }
 
-async function handleListSkills() {
+async function handleListSkills(): Promise<CallToolResult> {
   const skills = await listSkills();
   return {
-    content: [{ type: "text", text: JSON.stringify({ skills }, null, 2) }],
+    content: [{
+      type: "text" as const,
+      text: JSON.stringify({ skills }, null, 2),
+    }],
   };
+}
+
+/** Register all tools on a McpServer instance. */
+function registerTools(mcpServer: McpServer): void {
+  mcpServer.registerTool(
+    "run_script",
+    {
+      description:
+        'Execute a TypeScript module in a sandboxed Deno subprocess. Script format: export default async function main(input: unknown) { ... } — the default export receives the `input` object and is awaited. Optionally export `inputSchema` (Zod@4 schema) for runtime input validation. Supports `import { z } from "zod"`, `jsr:@scope/pkg@version`, `npm:pkg`, Deno built-ins, and node:compat (node:fs, node:path, node:os). ES module format only. Use mode: "eval" with inline code, or mode: "module" with a modulePath. Runs with --no-',
+      inputSchema: RunScriptInputSchema,
+      annotations: { destructiveHint: true },
+    },
+    (args, ctx) => handleRunScript(args, ctx),
+  );
+
+  mcpServer.registerTool(
+    "list_runs",
+    {
+      description: "List recent run records",
+      inputSchema: ListRunsInputSchema,
+      annotations: { readOnlyHint: true },
+    },
+    (args, _ctx) => handleListRuns(args),
+  );
+
+  mcpServer.registerTool(
+    "run_skill",
+    {
+      description: "Execute a skill by its directory path",
+      inputSchema: RunSkillInputSchema,
+      annotations: { destructiveHint: true },
+    },
+    (args, ctx) => handleRunSkill(args, ctx),
+  );
+
+  mcpServer.registerTool(
+    "suggest_skills",
+    {
+      description: "Find run clusters that look like skill candidates",
+      inputSchema: SuggestSkillsInputSchema,
+      annotations: { readOnlyHint: true },
+    },
+    (args, _ctx) => handleSuggestSkills(args ?? {}),
+  );
+
+  mcpServer.registerTool(
+    "promote_to_skill",
+    {
+      description: "Promote a run to a skill, writing to disk",
+      inputSchema: PromoteToSkillInputSchema,
+      annotations: { destructiveHint: true },
+    },
+    (args, _ctx) => handlePromoteToSkill(args ?? {}),
+  );
+
+  mcpServer.registerTool(
+    "list_skills",
+    {
+      description: "List all discovered skills in configured roots",
+      annotations: { readOnlyHint: true },
+    },
+    (_ctx: ServerContext) => handleListSkills(),
+  );
+
+  mcpServer.registerTool(
+    "query_runs",
+    {
+      description:
+        `Query Aves run records and skill approvals using read-only SQL (SELECT/PRAGMA only).\n\nTable schema:\n${RUNS_TABLE_DDL}`,
+      inputSchema: QueryRunsInputSchema,
+      annotations: { readOnlyHint: true },
+    },
+    (args, _ctx) => handleQueryRuns(args),
+  );
+}
+
+/** Register the prompt on a McpServer instance. */
+function registerPrompts(mcpServer: McpServer): void {
+  mcpServer.registerPrompt(
+    AVES_PROMPT_NAME,
+    { description: AVES_PROMPT_DESCRIPTION },
+    async () => ({
+      messages: [
+        {
+          role: "user",
+          content: { type: "text" as const, text: await buildAvesPrompt() },
+        },
+      ],
+    }),
+  );
+}
+
+/** Register resource handlers on a McpServer instance (via low-level Server). */
+function registerResources(mcpServer: McpServer): void {
+  mcpServer.server.setRequestHandler("resources/list", handleListResources);
+  mcpServer.server.setRequestHandler(
+    "resources/templates/list",
+    handleListResourceTemplates,
+  );
+  mcpServer.server.setRequestHandler(
+    "resources/read",
+    (req: { params: { uri: string } }) => handleReadResource(req.params.uri),
+  );
 }
 
 // ============================================================
@@ -493,7 +566,7 @@ async function handleListSkills() {
 export async function startHttpServer(
   host: string = "127.0.0.1",
 ): Promise<{ port: number }> {
-  const mcpServer = new Server(
+  const mcpServer = new McpServer(
     { name: "aves-mcp", version: "0.1.0" },
     {
       capabilities: {
@@ -508,90 +581,13 @@ export async function startHttpServer(
   // Make the server instance available to handlers
   _mcpServer = mcpServer;
 
+  registerTools(mcpServer);
+  registerPrompts(mcpServer);
+  registerResources(mcpServer);
+
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: crypto.randomUUID.bind(crypto),
   });
-
-  mcpServer.setRequestHandler(ListToolsRequestSchema, () => ({
-    tools: [
-      RUN_SCRIPT_TOOL,
-      LIST_RUNS_TOOL,
-      RUN_SKILL_TOOL,
-      SUGGEST_SKILLS_TOOL,
-      PROMOTE_TO_SKILL_TOOL,
-      LIST_SKILLS_TOOL,
-      QUERY_RUNS_TOOL,
-    ],
-  }));
-
-  mcpServer.setRequestHandler(
-    CallToolRequestSchema,
-    async (request: CallToolRequest) => {
-      const { name, arguments: args } = request.params;
-      switch (name) {
-        case "run_script": {
-          const meta = (request.params as Record<string, unknown>)?._meta;
-          return await handleRunScript(args ?? {}, meta);
-        }
-        case "list_runs":
-          return await handleListRuns();
-        case "run_skill": {
-          const meta = (request.params as Record<string, unknown>)?._meta;
-          return await handleRunSkill(args ?? {}, meta);
-        }
-        case "suggest_skills":
-          return await handleSuggestSkills(args ?? {});
-        case "promote_to_skill":
-          return await handlePromoteToSkill(args ?? {});
-        case "list_skills":
-          return await handleListSkills();
-        case "query_runs":
-          return await handleQueryRuns(args ?? {});
-        default:
-          throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
-      }
-    },
-  );
-
-  mcpServer.setRequestHandler(ListPromptsRequestSchema, () => ({
-    prompts: [
-      {
-        name: AVES_PROMPT_NAME,
-        description: AVES_PROMPT_DESCRIPTION,
-        arguments: [],
-      },
-    ],
-  }));
-
-  mcpServer.setRequestHandler(
-    GetPromptRequestSchema,
-    async (req: { params: { name: string } }) => {
-      if (req.params.name === AVES_PROMPT_NAME) {
-        return {
-          messages: [
-            {
-              role: "user",
-              content: { type: "text", text: await buildAvesPrompt() },
-            },
-          ],
-        };
-      }
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        `Unknown prompt: ${req.params.name}`,
-      );
-    },
-  );
-
-  mcpServer.setRequestHandler(ListResourcesRequestSchema, handleListResources);
-  mcpServer.setRequestHandler(
-    ListResourceTemplatesRequestSchema,
-    handleListResourceTemplates,
-  );
-  mcpServer.setRequestHandler(
-    ReadResourceRequestSchema,
-    (req: { params: { uri: string } }) => handleReadResource(req.params.uri),
-  );
 
   await mcpServer.connect(transport);
 
@@ -620,7 +616,7 @@ export async function startHttpServer(
 }
 
 export async function startServer() {
-  const server = new Server(
+  const mcpServer = new McpServer(
     {
       name: "aves-mcp",
       version: "0.1.0",
@@ -636,91 +632,13 @@ export async function startServer() {
   );
 
   // Make the server instance available to handlers
-  _mcpServer = server;
+  _mcpServer = mcpServer;
 
-  server.setRequestHandler(ListToolsRequestSchema, () => ({
-    tools: [
-      RUN_SCRIPT_TOOL,
-      LIST_RUNS_TOOL,
-      RUN_SKILL_TOOL,
-      SUGGEST_SKILLS_TOOL,
-      PROMOTE_TO_SKILL_TOOL,
-      LIST_SKILLS_TOOL,
-      QUERY_RUNS_TOOL,
-    ],
-  }));
-
-  server.setRequestHandler(
-    CallToolRequestSchema,
-    async (request: CallToolRequest) => {
-      const { name, arguments: args } = request.params;
-
-      switch (name) {
-        case "run_script": {
-          const meta = (request.params as Record<string, unknown>)?._meta;
-          return await handleRunScript(args ?? {}, meta);
-        }
-        case "list_runs":
-          return await handleListRuns();
-        case "run_skill": {
-          const meta = (request.params as Record<string, unknown>)?._meta;
-          return await handleRunSkill(args ?? {}, meta);
-        }
-        case "suggest_skills":
-          return await handleSuggestSkills(args ?? {});
-        case "promote_to_skill":
-          return await handlePromoteToSkill(args ?? {});
-        case "list_skills":
-          return await handleListSkills();
-        case "query_runs":
-          return await handleQueryRuns(args ?? {});
-        default:
-          throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
-      }
-    },
-  );
+  registerTools(mcpServer);
+  registerPrompts(mcpServer);
+  registerResources(mcpServer);
 
   const transport = new StdioServerTransport();
-  server.setRequestHandler(ListPromptsRequestSchema, () => ({
-    prompts: [
-      {
-        name: AVES_PROMPT_NAME,
-        description: AVES_PROMPT_DESCRIPTION,
-        arguments: [],
-      },
-    ],
-  }));
-
-  server.setRequestHandler(
-    GetPromptRequestSchema,
-    async (req: { params: { name: string } }) => {
-      if (req.params.name === AVES_PROMPT_NAME) {
-        return {
-          messages: [
-            {
-              role: "user",
-              content: { type: "text", text: await buildAvesPrompt() },
-            },
-          ],
-        };
-      }
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        `Unknown prompt: ${req.params.name}`,
-      );
-    },
-  );
-
-  server.setRequestHandler(ListResourcesRequestSchema, handleListResources);
-  server.setRequestHandler(
-    ListResourceTemplatesRequestSchema,
-    handleListResourceTemplates,
-  );
-  server.setRequestHandler(
-    ReadResourceRequestSchema,
-    (req: { params: { uri: string } }) => handleReadResource(req.params.uri),
-  );
-
-  await server.connect(transport);
+  await mcpServer.connect(transport);
   console.error("Aves MCP server started on stdio");
 }

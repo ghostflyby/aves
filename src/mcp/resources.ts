@@ -1,6 +1,6 @@
 // Aves MCP resources — static metadata, dynamic examples, and parameterized lookups.
 
-import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
+import { ProtocolError, ProtocolErrorCode } from "@modelcontextprotocol/server";
 import { RUNS_TABLE_DDL } from "../db-schema.ts";
 import { loadRun } from "../run-store.ts";
 import { listSkills } from "../skill.ts";
@@ -127,8 +127,8 @@ export async function handleReadResource(uri: string): Promise<{
         contents: [{ uri, mimeType: "text/markdown", text: content }],
       };
     }
-    throw new McpError(
-      ErrorCode.InvalidParams,
+    throw new ProtocolError(
+      ProtocolErrorCode.InvalidParams,
       `Example not found: ${exampleMatch[1]}`,
     );
   }
@@ -139,8 +139,8 @@ export async function handleReadResource(uri: string): Promise<{
     const skills = await listSkills();
     const skill = skills.find((s) => s.name === skillName);
     if (!skill) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
+      throw new ProtocolError(
+        ProtocolErrorCode.InvalidParams,
         `Skill not found: ${skillName}`,
       );
     }
@@ -154,8 +154,8 @@ export async function handleReadResource(uri: string): Promise<{
         }],
       };
     } catch {
-      throw new McpError(
-        ErrorCode.InternalError,
+      throw new ProtocolError(
+        ProtocolErrorCode.InternalError,
         `Could not read SKILL.md for skill: ${skillName}`,
       );
     }
@@ -165,8 +165,8 @@ export async function handleReadResource(uri: string): Promise<{
   if (runMatch) {
     const run = await loadRun(runMatch[1]);
     if (!run) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
+      throw new ProtocolError(
+        ProtocolErrorCode.InvalidParams,
         `Run not found: ${runMatch[1]}`,
       );
     }
@@ -179,5 +179,8 @@ export async function handleReadResource(uri: string): Promise<{
     };
   }
 
-  throw new McpError(ErrorCode.InvalidParams, `Unknown resource: ${uri}`);
+  throw new ProtocolError(
+    ProtocolErrorCode.InvalidParams,
+    `Unknown resource: ${uri}`,
+  );
 }
