@@ -53,7 +53,7 @@ import type { SandboxState } from "../sandbox-state.ts";
 const RUN_SCRIPT_TOOL = {
   name: "run_script",
   description:
-    'Execute a TypeScript module in a sandboxed Deno subprocess. Script format: export default async function main(input: unknown) { ... } — the default export receives the `input` object and is awaited. Optionally export `inputSchema` (Zod@4 schema) for runtime input validation. Supports `import { z } from "zod"`, Deno built-ins, and node:compat libraries (node:fs, node:path, node:os). ES module format only. Use mode: "eval" with inline code, or mode: "module" with a modulePath. Runs with --no-',
+    'Execute a TypeScript module in a sandboxed Deno subprocess. Script format: export default async function main(input: unknown) { ... } — the default export receives the `input` object and is awaited. Optionally export `inputSchema` (Zod@4 schema) for runtime input validation. Supports `import { z } from "zod"`, `jsr:@scope/pkg@version`, `npm:pkg`, Deno built-ins, and node:compat (node:fs, node:path, node:os). ES module format only. Use mode: "eval" with inline code, or mode: "module" with a modulePath. Runs with --no-',
   inputSchema: RunScriptInputSchema.toJSONSchema(),
   annotations: { destructiveHint: true },
 };
