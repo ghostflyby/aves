@@ -2,6 +2,7 @@
 // src/repl/session.ts — ReplSession class
 // ============================================================
 
+import { fileURLToPath } from "node:url";
 import {
   type BrokerHandle,
   type ElicitResolver,
@@ -211,8 +212,8 @@ export class ReplSession {
 // Spawn — uses createRunBrokerPolicy from runner.ts
 // ============================================================
 
-const BOOT_PATH = new URL("./repl-boot.ts", import.meta.url).pathname;
-
+// Resolve repl-boot.ts relative to this source, falling back to PWD/src.
+const BOOT_PATH = fileURLToPath(new URL("./repl-boot.ts", import.meta.url));
 const DEFAULT_IMPORT_DOMAINS = [
   "deno.land:443",
   "jsr.io:443",

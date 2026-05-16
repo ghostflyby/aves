@@ -15,9 +15,13 @@ import { loadPermissionModule } from "./permission-loader.ts";
  * Each script run creates a child controller linked to this one,
  * so all spawned Deno subprocesses are killed when Aves exits.
  */
+
+import { fileURLToPath } from "node:url";
 export const globalAbort = new AbortController();
 
-const BOOT_PATH = new URL("./boot.ts", import.meta.url).pathname;
+// Resolve boot.ts relative to the runner source, falling back to PWD/src.
+const _runnerDir = fileURLToPath(new URL(".", import.meta.url));
+const BOOT_PATH = fileURLToPath(new URL("./boot.ts", import.meta.url));
 
 // ============================================================
 // Default-allowed import domains (cannot go through broker —
