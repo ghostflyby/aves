@@ -111,7 +111,7 @@ async function cmdStdio() {
   await startServer();
   closeDb();
   disposePool();
-    replManager.closeAll().catch(() => {});
+  replManager.closeAll().catch(() => {});
 }
 
 /**

@@ -24,12 +24,12 @@ import {
   ListRunsInputSchema,
   PromoteToSkillInputSchema,
   QueryRunsInputSchema,
-  RunScriptInputSchema,
-  RunSkillInputSchema,
-  SuggestSkillsInputSchema,
   ReplCloseInputSchema,
   ReplCreateInputSchema,
   ReplEvalInputSchema,
+  RunScriptInputSchema,
+  RunSkillInputSchema,
+  SuggestSkillsInputSchema,
 } from "./tool-schemas.ts";
 
 import {
@@ -460,7 +460,6 @@ async function handleListSkills(): Promise<CallToolResult> {
 
 /** Register all tools on a McpServer instance. */
 
-
 async function handleReplCreate(
   args: unknown,
   ctx: ServerContext,
@@ -490,7 +489,9 @@ async function handleReplCreate(
     timeoutMs: timeout_ms,
     onElicit,
   });
-  return { content: [{ type: "text" as const, text: JSON.stringify(info, null, 2) }] };
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(info, null, 2) }],
+  };
 }
 
 async function handleReplEval(
@@ -498,10 +499,19 @@ async function handleReplEval(
 ): Promise<CallToolResult> {
   const parsed = args ? ReplEvalInputSchema.safeParse(args) : null;
   if (!parsed?.success) {
-    throw new ProtocolError(ProtocolErrorCode.InvalidParams, "repl_eval requires valid params");
+    throw new ProtocolError(
+      ProtocolErrorCode.InvalidParams,
+      "repl_eval requires valid params",
+    );
   }
-  const result = await replManager.eval(parsed.data.session_id, parsed.data.code, parsed.data.timeout_ms);
-  return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+  const result = await replManager.eval(
+    parsed.data.session_id,
+    parsed.data.code,
+    parsed.data.timeout_ms,
+  );
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+  };
 }
 
 async function handleReplClose(
@@ -509,18 +519,23 @@ async function handleReplClose(
 ): Promise<CallToolResult> {
   const parsed = args ? ReplCloseInputSchema.safeParse(args) : null;
   if (!parsed?.success) {
-    throw new ProtocolError(ProtocolErrorCode.InvalidParams, "repl_close requires valid params");
+    throw new ProtocolError(
+      ProtocolErrorCode.InvalidParams,
+      "repl_close requires valid params",
+    );
   }
   const closed = await replManager.close(parsed.data.session_id);
-  return { content: [{ type: "text" as const, text: JSON.stringify({ closed }) }] };
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify({ closed }) }],
+  };
 }
 
 function registerTools(mcpServer: McpServer): void {
-
   mcpServer.registerTool(
     "repl_create",
     {
-      description: "Create a persistent REPL session for interactive TypeScript evaluation. Returns a session_id for use with repl_eval and repl_close. Sessions maintain variable state across evaluations. Supports optional permissions and sandbox ceiling.",
+      description:
+        "Create a persistent REPL session for interactive TypeScript evaluation. Returns a session_id for use with repl_eval and repl_close. Sessions maintain variable state across evaluations. Supports optional permissions and sandbox ceiling.",
       inputSchema: ReplCreateInputSchema,
       annotations: { destructiveHint: true },
     },
@@ -530,7 +545,8 @@ function registerTools(mcpServer: McpServer): void {
   mcpServer.registerTool(
     "repl_eval",
     {
-      description: "Evaluate TypeScript code in a persistent REPL session. Supports top-level await, ES module imports (including npm: specifiers), const re-binding, and retains state across calls. Use repl_create to get a session ID first.",
+      description:
+        "Evaluate TypeScript code in a persistent REPL session. Supports top-level await, ES module imports (including npm: specifiers), const re-binding, and retains state across calls. Use repl_create to get a session ID first.",
       inputSchema: ReplEvalInputSchema,
       annotations: { destructiveHint: true },
     },
@@ -540,7 +556,8 @@ function registerTools(mcpServer: McpServer): void {
   mcpServer.registerTool(
     "repl_close",
     {
-      description: "Close a REPL session and free its resources. Any pending evaluations will be aborted.",
+      description:
+        "Close a REPL session and free its resources. Any pending evaluations will be aborted.",
       inputSchema: ReplCloseInputSchema,
       annotations: { destructiveHint: true },
     },

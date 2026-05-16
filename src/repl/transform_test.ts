@@ -1,8 +1,5 @@
-import {
-  assertEquals,
-  assertStringIncludes,
-} from "@std/assert";
-import { transform, rewriteReferences } from "./transform.ts";
+import { assertEquals, assertStringIncludes } from "@std/assert";
+import { rewriteReferences, transform } from "./transform.ts";
 import { replManager } from "./manager.ts";
 
 // ============================================================
@@ -192,8 +189,7 @@ async function bootEval(
   proc.stdin.close();
 
   const out = await proc.output();
-  
-  
+
   return new TextDecoder()
     .decode(out.stdout)
     .trim()

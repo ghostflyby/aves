@@ -142,15 +142,19 @@ function collectNames(node: EstreeNode, names: Set<string>): void {
   if (node.type === "Identifier") {
     names.add((node as unknown as { name: string }).name);
   } else if (node.type === "ObjectPattern") {
-    for (const prop of (
-      node.properties as unknown as Array<{ value: EstreeNode }>
-    ) ?? []) {
+    for (
+      const prop of (
+        node.properties as unknown as Array<{ value: EstreeNode }>
+      ) ?? []
+    ) {
       collectNames(prop.value, names);
     }
   } else if (node.type === "ArrayPattern") {
-    for (const elem of (
-      node.elements as unknown as Array<EstreeNode | null>
-    ) ?? []) {
+    for (
+      const elem of (
+        node.elements as unknown as Array<EstreeNode | null>
+      ) ?? []
+    ) {
       if (elem) collectNames(elem, names);
     }
   } else if (node.type === "AssignmentPattern") {
@@ -179,9 +183,13 @@ function genDestructure(
       const name = (n as unknown as { name: string }).name;
       stmts.push(es(assign(scopeMem(name), accessor)));
     } else if (n.type === "ObjectPattern") {
-      for (const prop of (
-        n.properties as unknown as Array<{ key: { name: string }; value: EstreeNode }>
-      ) ?? []) {
+      for (
+        const prop of (
+          n.properties as unknown as Array<
+            { key: { name: string }; value: EstreeNode }
+          >
+        ) ?? []
+      ) {
         w(prop.value, mem(accessor, prop.key.name));
       }
     } else if (n.type === "ArrayPattern") {
@@ -284,11 +292,19 @@ function addParamsToScope(params: EstreeNode[], scopes: ScopeStack): void {
     if (node.type === "Identifier") {
       scope.add((node as unknown as { name: string }).name);
     } else if (node.type === "ObjectPattern") {
-      for (const prop of (node as unknown as { properties: Array<{ value: EstreeNode }> }).properties) {
+      for (
+        const prop
+          of (node as unknown as { properties: Array<{ value: EstreeNode }> })
+            .properties
+      ) {
         add(prop.value);
       }
     } else if (node.type === "ArrayPattern") {
-      for (const elem of (node as unknown as { elements: Array<EstreeNode | null> }).elements) {
+      for (
+        const elem
+          of (node as unknown as { elements: Array<EstreeNode | null> })
+            .elements
+      ) {
         if (elem) add(elem);
       }
     } else if (node.type === "AssignmentPattern") {

@@ -7,9 +7,8 @@ import type { SandboxState } from "../sandbox-state.ts";
 import type { ElicitResolver, PermissionRequest } from "../broker.ts";
 import {
   type ReplSession,
-
-  spawnReplSession,
   type ReplSessionInfo,
+  spawnReplSession,
 } from "./session.ts";
 
 export interface ReplCreateOptions {
@@ -64,7 +63,9 @@ export class ReplManager {
   async closeAll(): Promise<void> {
     const sessions = Array.from(this.sessions.values());
     for (const session of sessions) {
-      try { await session.close(); } catch { /* best-effort */ }
+      try {
+        await session.close();
+      } catch { /* best-effort */ }
       this.sessions.delete(session.id);
     }
   }

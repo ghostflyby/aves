@@ -3,10 +3,10 @@
 // ============================================================
 
 import {
-  startBroker,
   type BrokerHandle,
   type ElicitResolver,
   type PermissionRequest,
+  startBroker,
 } from "../broker.ts";
 import {
   createRunBrokerPolicy,
@@ -66,7 +66,9 @@ export class ReplSession {
     this.cwd = cwd;
     this.defaultTimeoutMs = timeoutMs;
     this.proc = proc;
-    this.closedPromise = new Promise((r) => { this.resolveClosed = r; });
+    this.closedPromise = new Promise((r) => {
+      this.resolveClosed = r;
+    });
     this.stdinWriter = proc.stdin.getWriter();
     this.readLoop();
   }
@@ -131,7 +133,9 @@ export class ReplSession {
   }
 
   eval(code: string, timeoutMs?: number): Promise<ReplResult> {
-    if (this.closed) return Promise.resolve({ ok: false, error: "session closed" });
+    if (this.closed) {
+      return Promise.resolve({ ok: false, error: "session closed" });
+    }
     this.evalCount++;
     const effectiveTimeout = timeoutMs ?? this.defaultTimeoutMs;
     const id = `eval_${this.evalCount}`;
@@ -180,11 +184,15 @@ export class ReplSession {
     await Promise.race([this.closedPromise, timeout]);
     this.readAbort.abort();
 
-    try { this.proc.kill("SIGKILL"); } catch { /* dead */ }
+    try {
+      this.proc.kill("SIGKILL");
+    } catch { /* dead */ }
 
     if (this.broker) {
       this.broker.cancel();
-      try { await this.broker.done; } catch { /* best-effort */ }
+      try {
+        await this.broker.done;
+      } catch { /* best-effort */ }
       this.broker = null;
     }
 
@@ -289,7 +297,9 @@ export async function spawnReplSession(
   }
 
   const onGlobalAbort = () => {
-    try { proc.kill("SIGKILL"); } catch { /* dead */ }
+    try {
+      proc.kill("SIGKILL");
+    } catch { /* dead */ }
     broker.cancel();
   };
   globalAbort.signal.addEventListener("abort", onGlobalAbort);
@@ -297,7 +307,13 @@ export async function spawnReplSession(
     globalAbort.signal.removeEventListener("abort", onGlobalAbort);
   }).catch(() => {});
 
-  const session = new ReplSession(proc, id, description, realCwd, defaultTimeoutMs);
+  const session = new ReplSession(
+    proc,
+    id,
+    description,
+    realCwd,
+    defaultTimeoutMs,
+  );
   session.setBroker(broker);
   return session;
 }

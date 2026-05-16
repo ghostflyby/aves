@@ -23,7 +23,11 @@ async function main(): Promise<void> {
       buf = buf.slice(nl + 1);
       if (!line) continue;
       let m: Record<string, unknown>;
-      try { m = JSON.parse(line); } catch { continue; }
+      try {
+        m = JSON.parse(line);
+      } catch {
+        continue;
+      }
       if (m.type === "close") {
         await w({ type: "closed" });
         return;
@@ -43,8 +47,9 @@ async function ev(id: string, code: string): Promise<void> {
   try {
     const r = await esbuild.transform(code, { loader: "ts", format: "esm" });
     const wrapped = transform(r.code, declaredNames);
-    const AF = Object.getPrototypeOf(async function () {}).constructor as
-      new (...args: string[]) => (...args: unknown[]) => Promise<unknown>;
+    const AF = Object.getPrototypeOf(async function () {}).constructor as new (
+      ...args: string[]
+    ) => (...args: unknown[]) => Promise<unknown>;
     const fn = new AF("scope", wrapped);
     const data = await fn(scope);
     await w({ type: "result", id, ok: true, data });
