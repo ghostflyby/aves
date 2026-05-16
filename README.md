@@ -10,7 +10,7 @@ via cryptographic hash trust.
 ### Quick start (stdio)
 
 ```bash
-deno run -A jsr:@ghostflyby/aves
+deno run -A --unstable-worker-options jsr:@ghostflyby/aves
 ```
 
 ### As an MCP server
@@ -21,7 +21,7 @@ Add to `~/.codex/config.toml`:
 [[mcp_servers]]
 name = "aves"
 command = "deno"
-args = ["run", "-A", "jsr:@ghostflyby/aves"]
+args = ["run", "-A", "--unstable-worker-options", "jsr:@ghostflyby/aves"]
 ```
 
 ## How it works
@@ -150,7 +150,7 @@ receive sandbox context automatically.
 deno task test
 
 # Start the MCP server (stdio)
-deno run main.ts
+deno run -A --unstable-worker-options main.ts
 ```
 
 ### Project structure
