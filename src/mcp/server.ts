@@ -27,6 +27,9 @@ import {
   RunScriptInputSchema,
   RunSkillInputSchema,
   SuggestSkillsInputSchema,
+  ReplCloseInputSchema,
+  ReplCreateInputSchema,
+  ReplEvalInputSchema,
 } from "./tool-schemas.ts";
 
 import {
@@ -39,6 +42,8 @@ import {
   StdioServerTransport,
   WebStandardStreamableHTTPServerTransport,
 } from "@modelcontextprotocol/server";
+import { replManager } from "../repl/manager.ts";
+
 import type { ElicitResolver, PermissionRequest } from "../broker.ts";
 import type { SandboxState } from "../sandbox-state.ts";
 import { extractSandboxState } from "../sandbox-state.ts";
@@ -454,7 +459,94 @@ async function handleListSkills(): Promise<CallToolResult> {
 }
 
 /** Register all tools on a McpServer instance. */
+
+
+async function handleReplCreate(
+  args: unknown,
+  ctx: ServerContext,
+): Promise<CallToolResult> {
+  const parsed = ReplCreateInputSchema.safeParse(args);
+  if (!parsed.success) {
+    throw new ProtocolError(
+      ProtocolErrorCode.InvalidParams,
+      "repl_create: invalid params",
+    );
+  }
+  const sandboxState = extractSandboxState(ctx.mcpReq._meta);
+
+  // Build inline elicitation handler for permission requests
+  const onElicit = async (req: PermissionRequest, resolve: ElicitResolver) => {
+    const msg = formatElicitMessage(req, sandboxState);
+    const response = await elicitRequest(msg);
+    await resolve(isElicitationApproved(response));
+  };
+
+  const { cwd, permissions, timeout_ms, description } = parsed.data;
+  const info = await replManager.create({
+    cwd,
+    permissions,
+    description,
+    codexCeiling: sandboxState,
+    timeoutMs: timeout_ms,
+    onElicit,
+  });
+  return { content: [{ type: "text" as const, text: JSON.stringify(info, null, 2) }] };
+}
+
+async function handleReplEval(
+  args?: Record<string, unknown>,
+): Promise<CallToolResult> {
+  const parsed = args ? ReplEvalInputSchema.safeParse(args) : null;
+  if (!parsed?.success) {
+    throw new ProtocolError(ProtocolErrorCode.InvalidParams, "repl_eval requires valid params");
+  }
+  const result = await replManager.eval(parsed.data.session_id, parsed.data.code, parsed.data.timeout_ms);
+  return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+}
+
+async function handleReplClose(
+  args?: Record<string, unknown>,
+): Promise<CallToolResult> {
+  const parsed = args ? ReplCloseInputSchema.safeParse(args) : null;
+  if (!parsed?.success) {
+    throw new ProtocolError(ProtocolErrorCode.InvalidParams, "repl_close requires valid params");
+  }
+  const closed = await replManager.close(parsed.data.session_id);
+  return { content: [{ type: "text" as const, text: JSON.stringify({ closed }) }] };
+}
+
 function registerTools(mcpServer: McpServer): void {
+
+  mcpServer.registerTool(
+    "repl_create",
+    {
+      description: "Create a persistent REPL session for interactive TypeScript evaluation. Returns a session_id for use with repl_eval and repl_close. Sessions maintain variable state across evaluations. Supports optional permissions and sandbox ceiling.",
+      inputSchema: ReplCreateInputSchema,
+      annotations: { destructiveHint: true },
+    },
+    (args, ctx) => handleReplCreate(args, ctx),
+  );
+
+  mcpServer.registerTool(
+    "repl_eval",
+    {
+      description: "Evaluate TypeScript code in a persistent REPL session. Supports top-level await, ES module imports (including npm: specifiers), const re-binding, and retains state across calls. Use repl_create to get a session ID first.",
+      inputSchema: ReplEvalInputSchema,
+      annotations: { destructiveHint: true },
+    },
+    (args, _ctx) => handleReplEval(args),
+  );
+
+  mcpServer.registerTool(
+    "repl_close",
+    {
+      description: "Close a REPL session and free its resources. Any pending evaluations will be aborted.",
+      inputSchema: ReplCloseInputSchema,
+      annotations: { destructiveHint: true },
+    },
+    (args, _ctx) => handleReplClose(args),
+  );
+
   mcpServer.registerTool(
     "run_script",
     {

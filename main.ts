@@ -11,6 +11,7 @@ import { closeDb } from "./src/run-store.ts";
 // Force resolution of @modelcontextprotocol/server peer dependency
 import "@cfworker/json-schema";
 import { disposePool } from "./src/mcp/query-pool.ts";
+import { replManager } from "./src/repl/manager.ts";
 import { globalAbort } from "./src/runner.ts";
 
 // ============================================================
@@ -28,6 +29,7 @@ function registerCleanup() {
     cleanupAll().catch(() => {});
     closeDb();
     disposePool();
+    replManager.closeAll().catch(() => {});
   };
 
   // Graceful shutdown on signals
@@ -109,6 +111,7 @@ async function cmdStdio() {
   await startServer();
   closeDb();
   disposePool();
+    replManager.closeAll().catch(() => {});
 }
 
 /**

@@ -83,9 +83,29 @@ export const QueryRunsInputSchema = z.object({
   ),
 });
 
+
+export const ReplCreateInputSchema = z.object({
+  permissions: PermissionsSchema.optional().describe("Permission overrides"),
+  description: z.string().describe("Human-readable description for this REPL session").optional(),
+  cwd: z.string().describe("Working directory (default: current dir)").optional(),
+  timeout_ms: z.number().int().positive().describe("Per-eval timeout in milliseconds").optional(),
+});
+
+export const ReplEvalInputSchema = z.object({
+  session_id: z.string().describe("REPL session ID from repl_create"),
+  code: z.string().describe("TypeScript code to evaluate"),
+  timeout_ms: z.number().int().positive().describe("Per-eval timeout override").optional(),
+});
+
+export const ReplCloseInputSchema = z.object({
+  session_id: z.string().describe("REPL session ID to close"),
+});
 // Inferred types
 export type RunSkillInput = z.infer<typeof RunSkillInputSchema>;
 export type SuggestSkillsInput = z.infer<typeof SuggestSkillsInputSchema>;
 export type PromoteToSkillInput = z.infer<typeof PromoteToSkillInputSchema>;
 export type ListRunsInput = z.infer<typeof ListRunsInputSchema>;
 export type QueryRunsInput = z.infer<typeof QueryRunsInputSchema>;
+export type ReplCreateInput = z.infer<typeof ReplCreateInputSchema>;
+export type ReplEvalInput = z.infer<typeof ReplEvalInputSchema>;
+export type ReplCloseInput = z.infer<typeof ReplCloseInputSchema>;

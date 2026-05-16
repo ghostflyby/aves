@@ -1,6 +1,7 @@
 // Aves MCP resources — static metadata, dynamic examples, and parameterized lookups.
 
 import { ProtocolError, ProtocolErrorCode } from "@modelcontextprotocol/server";
+import { replManager } from "../repl/manager.ts";
 import { RUNS_TABLE_DDL } from "../db-schema.ts";
 import { loadRun } from "../run-store.ts";
 import { listSkills } from "../skill.ts";
@@ -46,6 +47,12 @@ export const handleListResources = async () => {
 
   return {
     resources: [
+      {
+        uri: "aves://repls",
+        name: "REPL sessions",
+        description: "Active REPL sessions with IDs, descriptions, and stats",
+        mimeType: "application/json",
+      },
       {
         uri: "aves://schema/runs",
         name: "Runs table schema",
@@ -97,6 +104,16 @@ export const handleListResourceTemplates = () => ({
 export async function handleReadResource(uri: string): Promise<{
   contents: { uri: string; mimeType: string; text: string }[];
 }> {
+  if (uri === "aves://repls") {
+    return {
+      contents: [{
+        uri,
+        mimeType: "application/json",
+        text: JSON.stringify({ sessions: replManager.list() }, null, 2),
+      }],
+    };
+  }
+
   if (uri === "aves://schema/runs") {
     return {
       contents: [{

@@ -1,0 +1,303 @@
+// ============================================================
+// src/repl/session.ts — ReplSession class
+// ============================================================
+
+import {
+  startBroker,
+  type BrokerHandle,
+  type ElicitResolver,
+  type PermissionRequest,
+} from "../broker.ts";
+import {
+  createRunBrokerPolicy,
+  globalAbort,
+  type RunElicitContext,
+} from "../runner.ts";
+import type { Permissions } from "../types.ts";
+import type { SandboxState } from "../sandbox-state.ts";
+
+export interface ReplResult {
+  ok: boolean;
+  data?: unknown;
+  error?: string;
+}
+
+export interface ReplSessionInfo {
+  id: string;
+  description: string;
+  evalCount: number;
+  pid: number;
+  startedAt: string;
+  cwd: string;
+}
+
+export class ReplSession {
+  readonly id: string;
+  readonly description: string;
+  readonly startedAt: string;
+  readonly cwd: string;
+  private proc: Deno.ChildProcess;
+  private broker: BrokerHandle | null = null;
+  private evalCount = 0;
+  private defaultTimeoutMs?: number;
+  private encoder = new TextEncoder();
+  private decoder = new TextDecoder();
+  private stdoutBuf = "";
+  private resolveMap = new Map<
+    string,
+    { resolve: (v: ReplResult) => void; reject: (e: Error) => void }
+  >();
+  private closed = false;
+  private stdinWriter: WritableStreamDefaultWriter<Uint8Array>;
+  private closedPromise: Promise<void>;
+  private resolveClosed!: () => void;
+  private readAbort = new AbortController();
+
+  constructor(
+    proc: Deno.ChildProcess,
+    id: string,
+    description: string,
+    cwd: string,
+    timeoutMs?: number,
+  ) {
+    this.id = id;
+    this.description = description;
+    this.startedAt = new Date().toISOString();
+    this.cwd = cwd;
+    this.defaultTimeoutMs = timeoutMs;
+    this.proc = proc;
+    this.closedPromise = new Promise((r) => { this.resolveClosed = r; });
+    this.stdinWriter = proc.stdin.getWriter();
+    this.readLoop();
+  }
+
+  private async readLoop(): Promise<void> {
+    const reader = this.proc.stdout.getReader({ mode: "byob" });
+    const buf = new Uint8Array(65536);
+
+    try {
+      const signal = this.readAbort.signal;
+      while (!signal.aborted) {
+        let result: ReadableStreamReadResult<Uint8Array>;
+        try {
+          result = await reader.read(buf);
+        } catch {
+          break;
+        }
+        if (result.done) break;
+        const { value } = result as { value: Uint8Array };
+        this.stdoutBuf += this.decoder.decode(value, { stream: true });
+        let nl: number;
+        while ((nl = this.stdoutBuf.indexOf("\n")) !== -1) {
+          const line = this.stdoutBuf.slice(0, nl).trim();
+          this.stdoutBuf = this.stdoutBuf.slice(nl + 1);
+          if (!line) continue;
+          try {
+            const msg = JSON.parse(line);
+            if (msg.type === "result" && msg.id) {
+              const pending = this.resolveMap.get(msg.id);
+              if (pending) {
+                this.resolveMap.delete(msg.id);
+                pending.resolve({
+                  ok: msg.ok as boolean,
+                  data: msg.data,
+                  error: msg.error,
+                });
+              }
+            } else if (msg.type === "closed") {
+              this.resolveClosed();
+              return;
+            }
+          } catch { /* malformed */ }
+        }
+      }
+    } catch (err) {
+      for (const [, pending] of this.resolveMap) {
+        pending.reject(err as Error);
+      }
+      this.resolveMap.clear();
+    } finally {
+      reader.releaseLock();
+    }
+    // Reject any remaining pending evals on process exit
+    if (this.resolveMap.size > 0) {
+      const exitErr = new Error("REPL process exited unexpectedly");
+      for (const [, pending] of this.resolveMap) {
+        pending.reject(exitErr);
+      }
+      this.resolveMap.clear();
+    }
+    this.closed = true;
+  }
+
+  eval(code: string, timeoutMs?: number): Promise<ReplResult> {
+    if (this.closed) return Promise.resolve({ ok: false, error: "session closed" });
+    this.evalCount++;
+    const effectiveTimeout = timeoutMs ?? this.defaultTimeoutMs;
+    const id = `eval_${this.evalCount}`;
+
+    return new Promise<ReplResult>((resolve, reject) => {
+      this.resolveMap.set(id, { resolve, reject });
+      const msg = JSON.stringify({ type: "eval", id, code }) + "\n";
+      this.stdinWriter.write(this.encoder.encode(msg))
+        .catch((err) => {
+          this.resolveMap.delete(id);
+          reject(err);
+        });
+
+      if (effectiveTimeout && effectiveTimeout > 0) {
+        setTimeout(() => {
+          if (this.resolveMap.has(id)) {
+            this.resolveMap.delete(id);
+            reject(new Error("REPL eval timed out"));
+          }
+        }, effectiveTimeout);
+      }
+    });
+  }
+
+  getInfo(): ReplSessionInfo {
+    return {
+      id: this.id,
+      description: this.description,
+      evalCount: this.evalCount,
+      pid: this.proc.pid,
+      startedAt: this.startedAt,
+      cwd: this.cwd,
+    };
+  }
+
+  async close(): Promise<void> {
+    if (this.closed) return;
+    this.closed = true;
+    try {
+      const msg = JSON.stringify({ type: "close" }) + "\n";
+      await this.stdinWriter.write(this.encoder.encode(msg));
+      this.stdinWriter.releaseLock();
+    } catch { /* dead */ }
+
+    const timeout = new Promise<void>((r) => setTimeout(r, 2000));
+    await Promise.race([this.closedPromise, timeout]);
+    this.readAbort.abort();
+
+    try { this.proc.kill("SIGKILL"); } catch { /* dead */ }
+
+    if (this.broker) {
+      this.broker.cancel();
+      try { await this.broker.done; } catch { /* best-effort */ }
+      this.broker = null;
+    }
+
+    for (const [, pending] of this.resolveMap) {
+      pending.reject(new Error("session closed"));
+    }
+    this.resolveMap.clear();
+  }
+
+  setBroker(broker: BrokerHandle): void {
+    this.broker = broker;
+  }
+}
+
+// ============================================================
+// Spawn — uses createRunBrokerPolicy from runner.ts
+// ============================================================
+
+const BOOT_PATH = new URL("./repl-boot.ts", import.meta.url).pathname;
+
+const DEFAULT_IMPORT_DOMAINS = [
+  "deno.land:443",
+  "jsr.io:443",
+  "esm.sh:443",
+  "raw.esm.sh:443",
+  "cdn.jsdelivr.net:443",
+  "raw.githubusercontent.com:443",
+  "gist.githubusercontent.com:443",
+];
+
+export interface SpawnOptions {
+  description?: string;
+  cwd?: string;
+  permissions?: Permissions;
+  codexCeiling?: SandboxState | null;
+  timeoutMs?: number;
+  onElicit?: (req: PermissionRequest, resolve: ElicitResolver) => Promise<void>;
+}
+
+export async function spawnReplSession(
+  options: SpawnOptions = {},
+): Promise<ReplSession> {
+  const id = crypto.randomUUID();
+  const description = options.description ?? `REPL ${id.slice(0, 8)}`;
+  const cwd = options.cwd ?? Deno.cwd();
+  const defaultTimeoutMs = options.timeoutMs;
+  const realCwd = await Deno.realPath(cwd);
+  const permissions = options.permissions ?? {};
+  const codexCeiling = options.codexCeiling ?? null;
+
+  // Build extraDirs from cwd + granted read/write paths
+  const extraDirs = [realCwd];
+  if (permissions.read) extraDirs.push(...permissions.read);
+  if (permissions.write) extraDirs.push(...permissions.write);
+
+  const ctx: RunElicitContext = {
+    codeHash: null,
+    codexCeiling,
+    extraDirs,
+  };
+
+  const policy = createRunBrokerPolicy(ctx);
+  if (options.onElicit) {
+    policy.onElicit = (_id, req, resolve) => {
+      options.onElicit!(req, resolve).catch(() => resolve(false));
+    };
+  }
+
+  let broker: BrokerHandle;
+  try {
+    broker = await startBroker(policy);
+  } catch (err) {
+    console.error(`[aves] broker start failed for REPL ${id}: ${err}`);
+    throw err;
+  }
+
+  const args = [
+    "run",
+    "--no-prompt",
+    "--allow-import=" + DEFAULT_IMPORT_DOMAINS.join(","),
+    BOOT_PATH,
+  ];
+
+  const cmd = new Deno.Command("deno", {
+    args,
+    cwd: realCwd,
+    stdout: "piped",
+    stdin: "piped",
+    stderr: "piped",
+    env: {
+      ...Deno.env.toObject(),
+      DENO_PERMISSION_BROKER_PATH: broker.sockPath,
+    },
+  });
+
+  let proc: Deno.ChildProcess;
+  try {
+    proc = cmd.spawn();
+  } catch (err) {
+    broker.cancel();
+    throw err;
+  }
+
+  const onGlobalAbort = () => {
+    try { proc.kill("SIGKILL"); } catch { /* dead */ }
+    broker.cancel();
+  };
+  globalAbort.signal.addEventListener("abort", onGlobalAbort);
+  proc.status.then(() => {
+    globalAbort.signal.removeEventListener("abort", onGlobalAbort);
+  }).catch(() => {});
+
+  const session = new ReplSession(proc, id, description, realCwd, defaultTimeoutMs);
+  session.setBroker(broker);
+  return session;
+}

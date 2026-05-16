@@ -115,7 +115,7 @@ function resolveTempDirs(): string[] {
   return dirs;
 }
 
-function isDefaultAllowed(
+export function isDefaultAllowed(
   req: { permission: PermissionKind; value: string },
 ): boolean {
   switch (req.permission) {
@@ -146,7 +146,7 @@ function isDefaultAllowed(
 // Path matching (handles macOS /var -> /private/var symlink)
 // ============================================================
 
-function pathMatches(allowed: string, requested: string): boolean {
+export function pathMatches(allowed: string, requested: string): boolean {
   if (requested.startsWith(allowed)) return true;
   const normReq = requested.replace(/^\/private/, "");
   const normAllowed = allowed.replace(/^\/private/, "");
@@ -174,7 +174,7 @@ export interface RunElicitContext {
   extraDirs: string[];
 }
 
-function createRunBrokerPolicy(
+export function createRunBrokerPolicy(
   ctx: RunElicitContext,
   skillDir?: string,
 ): BrokerPolicy {
