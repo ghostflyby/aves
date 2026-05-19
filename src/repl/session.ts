@@ -255,6 +255,29 @@ export async function spawnReplSession(
     extraDirs,
   };
 
+  // Resolve the exact native esbuild binary path for broker pre-approval,
+  // so esbuild initialisation does not fire broker elicitation during REPL startup.
+  // esbuild spawns a platform-specific native binary via child_process.spawn().
+  // Path pattern: .../npm/registry.npmjs.org/@esbuild/<platform>/<version>/bin/esbuild
+  {
+    const esbuildUrl = import.meta.resolve("npm:esbuild");
+    // esbuildUrl: file:///.../npm/registry.npmjs.org/esbuild/0.25.12/lib/main.js
+    const m = esbuildUrl.match(/\/esbuild\/([\d.]+)\//);
+    if (m) {
+      const version = m[1];
+      // Map Deno arch to esbuild's npm package naming
+      // deno: aarch64 → esbuild: arm64; deno: x86_64 → esbuild: x64
+      const archMap: Record<string, string> = { aarch64: "arm64", x86_64: "x64" };
+      const esbuildArch = archMap[Deno.build.arch] ?? Deno.build.arch;
+      const platformPkg = "@esbuild/" + Deno.build.os + "-" + esbuildArch;
+      const esbuildPath = esbuildUrl.replace(
+        /\/esbuild\/[\d.]+\/.*$/,
+        "/" + platformPkg + "/" + version + "/bin/esbuild"
+      );
+      ctx.preApprovedRunPaths = [await Deno.realPath(fileURLToPath(esbuildPath))];
+    }
+  }
+
   const policy = createRunBrokerPolicy(ctx);
   if (options.onElicit) {
     policy.onElicit = (_id, req, resolve) => {

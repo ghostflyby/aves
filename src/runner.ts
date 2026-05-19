@@ -16,6 +16,7 @@ import { loadPermissionModule } from "./permission-loader.ts";
  * so all spawned Deno subprocesses are killed when Aves exits.
  */
 
+import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 export const globalAbort = new AbortController();
 
@@ -176,6 +177,8 @@ export interface RunElicitContext {
   codeHash: string | null;
   codexCeiling: SandboxState | null;
   extraDirs: string[];
+  /** Run requests whose normalized value exactly matches an entry in this list are auto-allowed without elicitation. */
+  preApprovedRunPaths?: string[];
 }
 
 export function createRunBrokerPolicy(
@@ -197,6 +200,15 @@ export function createRunBrokerPolicy(
 
       // 1. Default allowed (safe sys, env, tmp, import domains)
       if (isDefaultAllowed(resolvedReq)) return "allow";
+
+      // 1b. Pre-approved run paths (e.g. esbuild native binary) — auto-allow without elicitation.
+      // Normalise so symlinks or trailing slashes don't defeat the exact match.
+      if (
+        resolvedReq.permission === "run" &&
+        ctx.preApprovedRunPaths?.some((p) => path.normalize(p) === path.normalize(resolvedValue))
+      ) {
+        return "allow";
+      }
 
       // 1a. Import not in built-in list → hard deny (no permModule override)
       if (resolvedReq.permission === "import") {
