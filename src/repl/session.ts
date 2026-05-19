@@ -298,7 +298,10 @@ function delay(ms: number): Promise<void> {
 // ============================================================
 
 // Resolve repl-boot.ts relative to this source, falling back to PWD/src.
-const BOOT_SPECIFIER = resolveModuleSpecifier("./repl-boot.ts", import.meta.url);
+const BOOT_SPECIFIER = resolveModuleSpecifier(
+  "./repl-boot.ts",
+  import.meta.url,
+);
 const DEFAULT_IMPORT_DOMAINS = [
   "deno.land:443",
   "jsr.io:443",
