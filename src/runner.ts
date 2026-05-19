@@ -205,7 +205,9 @@ export function createRunBrokerPolicy(
       // Normalise so symlinks or trailing slashes don't defeat the exact match.
       if (
         resolvedReq.permission === "run" &&
-        ctx.preApprovedRunPaths?.some((p) => path.normalize(p) === path.normalize(resolvedValue))
+        ctx.preApprovedRunPaths?.some((p) =>
+          path.normalize(p) === path.normalize(resolvedValue)
+        )
       ) {
         return "allow";
       }

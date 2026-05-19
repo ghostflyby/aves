@@ -72,23 +72,23 @@ export class ReplSession {
     });
     this.stdinWriter = proc.stdin.getWriter();
     this.readLoop();
+    this.stderrLoop();
   }
 
   private async readLoop(): Promise<void> {
-    const reader = this.proc.stdout.getReader({ mode: "byob" });
-    const buf = new Uint8Array(65536);
+    const reader = this.proc.stdout.getReader();
 
     try {
       const signal = this.readAbort.signal;
       while (!signal.aborted) {
         let result: ReadableStreamReadResult<Uint8Array>;
         try {
-          result = await reader.read(buf);
+          result = await reader.read();
         } catch {
           break;
         }
         if (result.done) break;
-        const { value } = result as { value: Uint8Array };
+        const { value } = result;
         this.stdoutBuf += this.decoder.decode(value, { stream: true });
         let nl: number;
         while ((nl = this.stdoutBuf.indexOf("\n")) !== -1) {
@@ -124,13 +124,33 @@ export class ReplSession {
     }
     // Reject any remaining pending evals on process exit
     if (this.resolveMap.size > 0) {
-      const exitErr = new Error("REPL process exited unexpectedly");
       for (const [, pending] of this.resolveMap) {
-        pending.reject(exitErr);
+        pending.resolve({
+          ok: false,
+          error: "REPL process exited unexpectedly",
+        });
       }
       this.resolveMap.clear();
     }
     this.closed = true;
+  }
+
+  private async stderrLoop(): Promise<void> {
+    const reader = this.proc.stderr.getReader();
+    try {
+      while (true) {
+        const result = await reader.read();
+        if (result.done) break;
+        const text = this.decoder.decode(result.value, { stream: true });
+        if (text) {
+          console.error(`[aves repl ${this.id}] ${text.trimEnd()}`);
+        }
+      }
+    } catch {
+      // Best-effort diagnostics only.
+    } finally {
+      reader.releaseLock();
+    }
   }
 
   eval(code: string, timeoutMs?: number): Promise<ReplResult> {
@@ -143,7 +163,12 @@ export class ReplSession {
 
     return new Promise<ReplResult>((resolve, reject) => {
       this.resolveMap.set(id, { resolve, reject });
-      const msg = JSON.stringify({ type: "eval", id, code }) + "\n";
+      const msg = JSON.stringify({
+        type: "eval",
+        id,
+        code,
+        timeout_ms: effectiveTimeout,
+      }) + "\n";
       this.stdinWriter.write(this.encoder.encode(msg))
         .catch((err) => {
           this.resolveMap.delete(id);
@@ -154,7 +179,7 @@ export class ReplSession {
         setTimeout(() => {
           if (this.resolveMap.has(id)) {
             this.resolveMap.delete(id);
-            reject(new Error("REPL eval timed out"));
+            resolve({ ok: false, error: "REPL eval timed out" });
           }
         }, effectiveTimeout);
       }
@@ -222,6 +247,7 @@ const DEFAULT_IMPORT_DOMAINS = [
   "cdn.jsdelivr.net:443",
   "raw.githubusercontent.com:443",
   "gist.githubusercontent.com:443",
+  "registry.npmjs.org:443",
 ];
 
 export interface SpawnOptions {
@@ -254,6 +280,7 @@ export async function spawnReplSession(
     codexCeiling,
     extraDirs,
   };
+  let esbuildBinaryPath: string | null = null;
 
   // Resolve the exact native esbuild binary path for broker pre-approval,
   // so esbuild initialisation does not fire broker elicitation during REPL startup.
@@ -267,14 +294,18 @@ export async function spawnReplSession(
       const version = m[1];
       // Map Deno arch to esbuild's npm package naming
       // deno: aarch64 → esbuild: arm64; deno: x86_64 → esbuild: x64
-      const archMap: Record<string, string> = { aarch64: "arm64", x86_64: "x64" };
+      const archMap: Record<string, string> = {
+        aarch64: "arm64",
+        x86_64: "x64",
+      };
       const esbuildArch = archMap[Deno.build.arch] ?? Deno.build.arch;
       const platformPkg = "@esbuild/" + Deno.build.os + "-" + esbuildArch;
       const esbuildPath = esbuildUrl.replace(
         /\/esbuild\/[\d.]+\/.*$/,
-        "/" + platformPkg + "/" + version + "/bin/esbuild"
+        "/" + platformPkg + "/" + version + "/bin/esbuild",
       );
-      ctx.preApprovedRunPaths = [await Deno.realPath(fileURLToPath(esbuildPath))];
+      esbuildBinaryPath = await Deno.realPath(fileURLToPath(esbuildPath));
+      ctx.preApprovedRunPaths = [esbuildBinaryPath];
     }
   }
 

@@ -2,6 +2,8 @@
 // sandbox-state_test.ts — unit tests for sandbox-state
 // ============================================================
 
+import { assert, assertEquals } from "@std/assert";
+
 import {
   extractCodexNetworkTargets,
   extractCodexReadablePaths,
@@ -274,8 +276,14 @@ Deno.test("extractCodexReadablePaths — resolves slash_tmp", () => {
     workspaces: [],
   } as SandboxState;
   const paths = extractCodexReadablePaths(state);
-  console.assert(paths.length === 1);
-  console.assert(paths[0] === "/tmp");
+  const expected = ["/tmp"];
+  const realTmp = Deno.realPathSync("/tmp");
+  if (realTmp !== "/tmp") expected.push(realTmp);
+  assertEquals(paths.length, expected.length);
+  assert(paths.includes("/tmp"));
+  for (const path of expected) {
+    assert(paths.includes(path), `expected slash_tmp to include ${path}`);
+  }
 });
 
 // ============================================================

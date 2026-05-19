@@ -261,7 +261,6 @@ Deno.test("isReadOnly - false with no read", () => {
   assertEquals(isReadOnly({ write: ["/tmp"] }), false);
 });
 
-
 // ============================================================
 // createRunBrokerPolicy — preApprovedRunPaths
 // ============================================================
@@ -276,30 +275,52 @@ function makeCtx(overrides: Partial<RunElicitContext> = {}): RunElicitContext {
 }
 
 Deno.test("createRunBrokerPolicy - preApprovedRunPaths allows matching run", async () => {
-  const ctx = makeCtx({ preApprovedRunPaths: ["/cache/esbuild/0.25.12/bin/esbuild"] });
+  const ctx = makeCtx({
+    preApprovedRunPaths: ["/cache/esbuild/0.25.12/bin/esbuild"],
+  });
   const policy = createRunBrokerPolicy(ctx);
-  const decision = await policy.decide({ id: 1, permission: "run", value: "/cache/esbuild/0.25.12/bin/esbuild" });
+  const decision = await policy.decide({
+    id: 1,
+    permission: "run",
+    value: "/cache/esbuild/0.25.12/bin/esbuild",
+  });
   assertEquals(decision, "allow");
 });
 
 Deno.test("createRunBrokerPolicy - preApprovedRunPaths rejects non-matching run", async () => {
-  const ctx = makeCtx({ preApprovedRunPaths: ["/cache/esbuild/0.25.12/bin/esbuild"] });
+  const ctx = makeCtx({
+    preApprovedRunPaths: ["/cache/esbuild/0.25.12/bin/esbuild"],
+  });
   const policy = createRunBrokerPolicy(ctx);
-  const decision = await policy.decide({ id: 1, permission: "run", value: "/usr/bin/evil" });
+  const decision = await policy.decide({
+    id: 1,
+    permission: "run",
+    value: "/usr/bin/evil",
+  });
   assertEquals(decision, "elicit");
 });
 
 Deno.test("createRunBrokerPolicy - no preApprovedRunPaths elicits run", async () => {
   const ctx = makeCtx();
   const policy = createRunBrokerPolicy(ctx);
-  const decision = await policy.decide({ id: 1, permission: "run", value: "/usr/bin/anything" });
+  const decision = await policy.decide({
+    id: 1,
+    permission: "run",
+    value: "/usr/bin/anything",
+  });
   assertEquals(decision, "elicit");
 });
 
 Deno.test("createRunBrokerPolicy - preApprovedRunPaths ignores non-run permissions", async () => {
-  const ctx = makeCtx({ preApprovedRunPaths: ["/cache/esbuild/0.25.12/bin/esbuild"] });
+  const ctx = makeCtx({
+    preApprovedRunPaths: ["/cache/esbuild/0.25.12/bin/esbuild"],
+  });
   const policy = createRunBrokerPolicy(ctx);
   // ffi permission should NOT be caught by preApprovedRunPaths, and should elicit
-  const decision = await policy.decide({ id: 1, permission: "ffi", value: "/cache/esbuild/0.25.12/bin/esbuild" });
+  const decision = await policy.decide({
+    id: 1,
+    permission: "ffi",
+    value: "/cache/esbuild/0.25.12/bin/esbuild",
+  });
   assertEquals(decision, "elicit");
 });

@@ -27,9 +27,37 @@ export function transform(
     sourceType: "module",
   }) as unknown as { type: string; body: EstreeNode[] };
 
+  // Remember whether the last statement is an expression before
+  // transformAst mutates the body — used for auto-return below.
+  const originalLast = ast.body[ast.body.length - 1];
+  const isExpressionEval = originalLast?.type === "ExpressionStatement";
+
   transformAst(ast, declaredNames);
   const generated = generate(ast, { comments: true });
-  const rewritten = rewriteReferences(generated, declaredNames);
+  let rewritten = rewriteReferences(generated, declaredNames);
+
+  // Auto-return the last expression so code like "1+1" or "x" yields
+  // a data value instead of undefined.  We reparse the *already-
+  // rewritten* body (avoiding acorn "return outside function" errors
+  // at module level during rewriteReferences) and convert the last
+  // ExpressionStatement to a ReturnStatement.
+  if (isExpressionEval) {
+    const rewrittenAst = acorn.parse(rewritten, {
+      ecmaVersion: "latest",
+      sourceType: "module",
+    }) as unknown as { type: string; body: EstreeNode[] };
+    const lastStmt = rewrittenAst.body[rewrittenAst.body.length - 1];
+    if (lastStmt && lastStmt.type === "ExpressionStatement") {
+      const expr =
+        ((lastStmt as unknown) as { expression: EstreeNode }).expression;
+      rewrittenAst.body[rewrittenAst.body.length - 1] = {
+        type: "ReturnStatement",
+        argument: expr,
+      } as unknown as EstreeNode;
+      rewritten = generate(rewrittenAst, { comments: true });
+    }
+  }
+
   return `return (async () => { ${rewritten} })();`;
 }
 
@@ -213,7 +241,7 @@ function genDestructure(
       }
     }
   };
-  w(node, id(tempName));
+  w(node, scopeMem(tempName));
 }
 
 function transformFuncDecl(
@@ -386,6 +414,11 @@ function walkRef(
       walkRef(me.object, names, localScopes, reps, false);
       return;
     }
+    walkRef(me.object, names, localScopes, reps, false);
+    if (me.computed) {
+      walkRef(me.property, names, localScopes, reps, false);
+    }
+    return;
   }
 
   if (node.type === "AssignmentExpression") {
@@ -425,6 +458,19 @@ function walkRef(
     }
     walkRef(vd.id, names, localScopes, reps, true);
     if (vd.init) walkRef(vd.init, names, localScopes, reps, false);
+    return;
+  }
+
+  if (node.type === "Property") {
+    const prop = node as unknown as {
+      key: EstreeNode;
+      value: EstreeNode;
+      computed: boolean;
+    };
+    if (prop.computed) {
+      walkRef(prop.key, names, localScopes, reps, false);
+    }
+    walkRef(prop.value, names, localScopes, reps, false);
     return;
   }
 

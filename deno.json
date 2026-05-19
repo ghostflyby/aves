@@ -5,7 +5,7 @@
   "license": "MIT",
   "tasks": {
     "dev": "deno run --watch main.ts",
-    "test": "deno test --allow-read --allow-write --allow-env --allow-run --allow-sys --unstable-worker-options"
+    "test": "deno test --allow-read --allow-write --allow-env --allow-run --allow-sys --unstable-worker-options --unstable-raw-imports"
   },
   "imports": {
     "@cfworker/json-schema": "npm:@cfworker/json-schema@^4.1.1",

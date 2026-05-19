@@ -37,13 +37,17 @@ async function main(): Promise<void> {
         typeof m.id === "string" &&
         typeof m.code === "string"
       ) {
-        await ev(m.id, m.code);
+        await ev(
+          m.id,
+          m.code,
+          typeof m.timeout_ms === "number" ? m.timeout_ms : undefined,
+        );
       }
     }
   }
 }
 
-async function ev(id: string, code: string): Promise<void> {
+async function ev(id: string, code: string, timeoutMs?: number): Promise<void> {
   try {
     const r = await esbuild.transform(code, { loader: "ts", format: "esm" });
     const wrapped = transform(r.code, declaredNames);
@@ -51,7 +55,7 @@ async function ev(id: string, code: string): Promise<void> {
       ...args: string[]
     ) => (...args: unknown[]) => Promise<unknown>;
     const fn = new AF("scope", wrapped);
-    const data = await fn(scope);
+    const data = await withTimeout(fn(scope), timeoutMs);
     await w({ type: "result", id, ok: true, data });
   } catch (err) {
     await w({
@@ -60,6 +64,27 @@ async function ev(id: string, code: string): Promise<void> {
       ok: false,
       error: err instanceof Error ? err.message : String(err),
     });
+  }
+}
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs?: number,
+): Promise<T> {
+  if (!timeoutMs || timeoutMs <= 0) return await promise;
+  let timer: number | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error("REPL eval timed out")),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
   }
 }
 
