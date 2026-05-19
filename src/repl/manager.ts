@@ -45,7 +45,12 @@ export class ReplManager {
     if (!session) {
       return { ok: false, error: `session not found: ${sessionId}` };
     }
-    return await session.eval(code, timeoutMs);
+    const result = await session.eval(code, timeoutMs);
+    if (result.fatal) {
+      this.sessions.delete(sessionId);
+    }
+    const { fatal: _fatal, ...publicResult } = result;
+    return publicResult;
   }
 
   async close(sessionId: string): Promise<boolean> {

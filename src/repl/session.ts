@@ -21,6 +21,7 @@ export interface ReplResult {
   ok: boolean;
   data?: unknown;
   error?: string;
+  fatal?: boolean;
 }
 
 export interface ReplSessionInfo {
@@ -46,13 +47,18 @@ export class ReplSession {
   private stdoutBuf = "";
   private resolveMap = new Map<
     string,
-    { resolve: (v: ReplResult) => void; reject: (e: Error) => void }
+    {
+      resolve: (v: ReplResult) => void;
+      reject: (e: Error) => void;
+      timer?: number;
+    }
   >();
   private closed = false;
   private stdinWriter: WritableStreamDefaultWriter<Uint8Array>;
   private closedPromise: Promise<void>;
   private resolveClosed!: () => void;
   private readAbort = new AbortController();
+  private cleanupStarted: Promise<void> | null = null;
 
   constructor(
     proc: Deno.ChildProcess,
@@ -100,6 +106,7 @@ export class ReplSession {
             if (msg.type === "result" && msg.id) {
               const pending = this.resolveMap.get(msg.id);
               if (pending) {
+                if (pending.timer !== undefined) clearTimeout(pending.timer);
                 this.resolveMap.delete(msg.id);
                 pending.resolve({
                   ok: msg.ok as boolean,
@@ -125,6 +132,7 @@ export class ReplSession {
     // Reject any remaining pending evals on process exit
     if (this.resolveMap.size > 0) {
       for (const [, pending] of this.resolveMap) {
+        if (pending.timer !== undefined) clearTimeout(pending.timer);
         pending.resolve({
           ok: false,
           error: "REPL process exited unexpectedly",
@@ -136,7 +144,9 @@ export class ReplSession {
   }
 
   private async stderrLoop(): Promise<void> {
-    const reader = this.proc.stderr.getReader();
+    const stderr = this.proc.stderr;
+    if (!stderr) return;
+    const reader = stderr.getReader();
     try {
       while (true) {
         const result = await reader.read();
@@ -162,7 +172,12 @@ export class ReplSession {
     const id = `eval_${this.evalCount}`;
 
     return new Promise<ReplResult>((resolve, reject) => {
-      this.resolveMap.set(id, { resolve, reject });
+      const pending = { resolve, reject } as {
+        resolve: (v: ReplResult) => void;
+        reject: (e: Error) => void;
+        timer?: number;
+      };
+      this.resolveMap.set(id, pending);
       const msg = JSON.stringify({
         type: "eval",
         id,
@@ -171,17 +186,22 @@ export class ReplSession {
       }) + "\n";
       this.stdinWriter.write(this.encoder.encode(msg))
         .catch((err) => {
+          if (pending.timer !== undefined) clearTimeout(pending.timer);
           this.resolveMap.delete(id);
           reject(err);
         });
 
       if (effectiveTimeout && effectiveTimeout > 0) {
-        setTimeout(() => {
-          if (this.resolveMap.has(id)) {
+        const timer = setTimeout(() => {
+          const pending = this.resolveMap.get(id);
+          if (pending) {
+            if (pending.timer !== undefined) clearTimeout(pending.timer);
             this.resolveMap.delete(id);
-            resolve({ ok: false, error: "REPL eval timed out" });
+            resolve({ ok: false, error: "REPL eval timed out", fatal: true });
+            void this.forceShutdown("SIGKILL", "session closed");
           }
         }, effectiveTimeout);
+        pending.timer = timer;
       }
     });
   }
@@ -198,21 +218,48 @@ export class ReplSession {
   }
 
   async close(): Promise<void> {
-    if (this.closed) return;
+    if (this.cleanupStarted) {
+      await this.cleanupStarted;
+      return;
+    }
+
+    if (!this.closed) {
+      this.closed = true;
+      try {
+        const msg = JSON.stringify({ type: "close" }) + "\n";
+        await this.stdinWriter.write(this.encoder.encode(msg));
+        this.stdinWriter.releaseLock();
+      } catch { /* dead */ }
+
+      await Promise.race([this.closedPromise, delay(2000)]);
+    }
+
+    await this.forceShutdown("SIGKILL", "session closed");
+  }
+
+  private forceShutdown(
+    signal: Deno.Signal,
+    pendingError: string,
+  ): Promise<void> {
+    if (!this.cleanupStarted) {
+      this.cleanupStarted = this.forceShutdownOnce(signal, pendingError);
+    }
+    return this.cleanupStarted;
+  }
+
+  private async forceShutdownOnce(
+    signal: Deno.Signal,
+    pendingError: string,
+  ): Promise<void> {
     this.closed = true;
-    try {
-      const msg = JSON.stringify({ type: "close" }) + "\n";
-      await this.stdinWriter.write(this.encoder.encode(msg));
-      this.stdinWriter.releaseLock();
-    } catch { /* dead */ }
-
-    const timeout = new Promise<void>((r) => setTimeout(r, 2000));
-    await Promise.race([this.closedPromise, timeout]);
     this.readAbort.abort();
-
     try {
-      this.proc.kill("SIGKILL");
+      this.stdinWriter.releaseLock();
+    } catch { /* already released */ }
+    try {
+      this.proc.kill(signal);
     } catch { /* dead */ }
+    await this.waitForExit();
 
     if (this.broker) {
       this.broker.cancel();
@@ -223,14 +270,26 @@ export class ReplSession {
     }
 
     for (const [, pending] of this.resolveMap) {
-      pending.reject(new Error("session closed"));
+      if (pending.timer !== undefined) clearTimeout(pending.timer);
+      pending.resolve({ ok: false, error: pendingError });
     }
     this.resolveMap.clear();
+  }
+
+  private async waitForExit(timeoutMs = 2000): Promise<void> {
+    await Promise.race([
+      this.proc.status.then(() => undefined).catch(() => undefined),
+      delay(timeoutMs),
+    ]);
   }
 
   setBroker(broker: BrokerHandle): void {
     this.broker = broker;
   }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 // ============================================================

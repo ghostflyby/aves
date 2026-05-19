@@ -19,6 +19,7 @@ interface E2eContext {
   realReplWorkspace: string;
   client: Client;
   transport: StdioClientTransport;
+  serverPid: number | null;
   stderr: string[];
   stage: string;
   cleanup: boolean;
@@ -54,7 +55,7 @@ function setStage(ctx: E2eContext, stage: string): void {
   ctx.stage = stage;
 }
 
-async function setupE2e(): Promise<E2eContext> {
+async function createE2eContext(): Promise<E2eContext> {
   const root = await Deno.makeTempDir({ prefix: "aves-mcp-e2e-" });
   const dataDir = `${root}/data`;
   const configDir = `${root}/config`;
@@ -82,7 +83,7 @@ async function setupE2e(): Promise<E2eContext> {
 
   const stderr: string[] = [];
   const transport = new StdioClientTransport({
-    command: "deno",
+    command: Deno.execPath(),
     args: [
       "run",
       "--allow-read",
@@ -132,33 +133,29 @@ async function setupE2e(): Promise<E2eContext> {
     realReplWorkspace,
     client,
     transport,
+    serverPid: null,
     stderr,
     stage: "setup",
     cleanup: false,
   };
 
-  try {
-    setStage(ctx, "connect");
-    await client.connect(transport, { timeout: 15000 });
-  } catch (err) {
-    throw withContextMessage(
-      ctx,
-      `failed to connect MCP client: ${
-        err instanceof Error ? err.message : String(err)
-      }`,
-    );
-  }
-
   return ctx;
+}
+
+async function connectE2e(ctx: E2eContext): Promise<void> {
+  setStage(ctx, "connect");
+  await ctx.client.connect(ctx.transport, { timeout: 15000 });
+  ctx.serverPid = ctx.transport.pid;
 }
 
 async function teardownE2e(ctx: E2eContext): Promise<void> {
   try {
     await ctx.client.close();
-    // The MCP SDK's stdio transport leaves an unref'ed loser timer behind its
-    // close() Promise.race when the child exits promptly. Let it drain so Deno's
-    // test sanitizer still verifies this e2e without a false timer leak.
-    await new Promise((resolve) => setTimeout(resolve, 2100));
+    await assertServerExited(ctx);
+    await drainStdioCloseTimer();
+  } catch (err) {
+    ctx.cleanup = false;
+    throw err;
   } finally {
     if (ctx.cleanup) {
       await Deno.remove(ctx.root, { recursive: true });
@@ -175,11 +172,54 @@ async function teardownE2e(ctx: E2eContext): Promise<void> {
   }
 }
 
+async function assertServerExited(ctx: E2eContext): Promise<void> {
+  if (ctx.serverPid == null) return;
+  const exited = await waitForProcessExit(ctx.serverPid, 2000);
+  if (!exited) {
+    throw withContextMessage(
+      ctx,
+      `stdio server process did not exit: pid ${ctx.serverPid}`,
+    );
+  }
+}
+
+async function waitForProcessExit(
+  pid: number,
+  timeoutMs: number,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!(await processExists(pid))) {
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return false;
+}
+
+async function processExists(pid: number): Promise<boolean> {
+  const result = await new Deno.Command("kill", {
+    args: ["-0", String(pid)],
+    stdout: "null",
+    stderr: "null",
+  }).output();
+  return result.success;
+}
+
+async function drainStdioCloseTimer(): Promise<void> {
+  // The MCP SDK's stdio transport leaves an unref'ed loser timer behind its
+  // close() Promise.race when the child exits promptly. Let it drain so Deno's
+  // test sanitizer still verifies this e2e without a false timer leak.
+  await new Promise((resolve) => setTimeout(resolve, 2100));
+}
+
 Deno.test(
   "mcp e2e: stdio lifecycle, tools, skills, runs, and repl sessions",
   async () => {
-    const ctx = await setupE2e();
+    const ctx = await createE2eContext();
     try {
+      await connectE2e(ctx);
+
       setStage(ctx, "ping");
       await ctx.client.ping({ timeout: 10000 });
 
@@ -220,6 +260,15 @@ Deno.test(
       const schemaText = schema.contents.find((item) => "text" in item)?.text ??
         "";
       assertStringIncludes(schemaText, "CREATE TABLE IF NOT EXISTS runs");
+      const templates = await ctx.client.listResourceTemplates(undefined, {
+        timeout: 10000,
+      });
+      assert(
+        templates.resourceTemplates.some((template) =>
+          template.uriTemplate === "aves://runs/{run_id}"
+        ),
+        "resources/templates/list should expose aves://runs/{run_id}",
+      );
 
       setStage(ctx, "run_script success");
       const runScriptOne = parseToolJson<Record<string, unknown>>(
@@ -262,6 +311,35 @@ Deno.test(
       assertEquals(runScriptTwo.exit_code, 0);
       assertEquals(runScriptTwo.output, { doubled: 42 });
 
+      setStage(ctx, "run_script module");
+      const modulePath = `${ctx.root}/module_script.ts`;
+      await Deno.writeTextFile(
+        modulePath,
+        [
+          "export default async function main(input: { base: number }) {",
+          "  return { mode: 'module', value: input.base + 4 };",
+          "}",
+          "",
+        ].join("\n"),
+      );
+      const runScriptModule = parseToolJson<Record<string, unknown>>(
+        await ctx.client.callTool(
+          {
+            name: "run_script",
+            arguments: {
+              mode: "module",
+              modulePath,
+              input: { base: 38 },
+              permissions: {},
+            },
+          },
+          { timeout: 30000 },
+        ),
+      );
+      assertEquals(runScriptModule.exit_code, 0);
+      assertEquals(runScriptModule.mode, "module");
+      assertEquals(runScriptModule.output, { mode: "module", value: 42 });
+
       setStage(ctx, "run_script failure");
       const runScriptThree = parseToolJson<Record<string, unknown>>(
         await ctx.client.callTool(
@@ -300,6 +378,25 @@ Deno.test(
         ),
         "list_runs should include failed run_script record",
       );
+      const filteredEvalRuns = parseToolJson<Array<Record<string, unknown>>>(
+        await ctx.client.callTool(
+          {
+            name: "list_runs",
+            arguments: { mode: "eval", exit_code: 0, limit: 5 },
+          },
+          { timeout: 15000 },
+        ),
+      );
+      assert(
+        filteredEvalRuns.length > 0,
+        "list_runs filter should return rows",
+      );
+      assert(
+        filteredEvalRuns.every((run) =>
+          run.mode === "eval" && run.exit_code === 0
+        ),
+        "list_runs filter should constrain mode and exit_code",
+      );
 
       setStage(ctx, "query_runs");
       const groupedRuns = parseToolJson<Array<Record<string, unknown>>>(
@@ -326,6 +423,31 @@ Deno.test(
         ),
         "query_runs should report failed eval records",
       );
+      const parameterizedRuns = parseToolJson<Array<Record<string, unknown>>>(
+        await ctx.client.callTool(
+          {
+            name: "query_runs",
+            arguments: {
+              sql: "SELECT run_id, mode FROM runs WHERE run_id = ?",
+              params: [String(runScriptOne.run_id)],
+            },
+          },
+          { timeout: 15000 },
+        ),
+      );
+      assertEquals(parameterizedRuns, [{
+        run_id: runScriptOne.run_id,
+        mode: "eval",
+      }]);
+      const runResource = await ctx.client.readResource(
+        { uri: `aves://runs/${runScriptOne.run_id}` },
+        { timeout: 10000 },
+      );
+      const runResourceJson = JSON.parse(
+        runResource.contents.find((item) => "text" in item)?.text ?? "{}",
+      ) as Record<string, unknown>;
+      assertEquals(runResourceJson.run_id, runScriptOne.run_id);
+      assertEquals(runResourceJson.mode, "eval");
 
       setStage(ctx, "repl create");
       const replInfo = parseToolJson<Record<string, unknown>>(
@@ -492,7 +614,7 @@ Deno.test(
             name: "repl_eval",
             arguments: {
               session_id: sessionId,
-              code: "await new Promise(() => {})",
+              code: "while (true) {}",
               timeout_ms: 50,
             },
           },
@@ -501,24 +623,59 @@ Deno.test(
       );
       assertEquals(timeoutResult.ok, false);
       assertStringIncludes(String(timeoutResult.error), "REPL eval timed out");
+      const evalAfterTimeout = parseToolJson<Record<string, unknown>>(
+        await ctx.client.callTool(
+          {
+            name: "repl_eval",
+            arguments: { session_id: sessionId, code: "x + y" },
+          },
+          { timeout: 15000 },
+        ),
+      );
+      assertEquals(evalAfterTimeout.ok, false);
+      assertStringIncludes(String(evalAfterTimeout.error), "session not found");
+
+      const replacementRepl = parseToolJson<Record<string, unknown>>(
+        await ctx.client.callTool(
+          {
+            name: "repl_create",
+            arguments: {
+              cwd: ctx.replWorkspace,
+              description: "e2e replacement repl session",
+              permissions: {},
+              timeout_ms: 1000,
+            },
+          },
+          { timeout: 30000 },
+        ),
+      );
+      const replacementSessionId = replacementRepl.session_id ??
+        replacementRepl.id;
+      assertEquals(typeof replacementSessionId, "string");
       assertEquals(
         parseToolJson<Record<string, unknown>>(
           await ctx.client.callTool(
             {
               name: "repl_eval",
-              arguments: { session_id: sessionId, code: "x + y" },
+              arguments: {
+                session_id: replacementSessionId,
+                code: "const fresh = 40 + 2; fresh",
+              },
             },
             { timeout: 15000 },
           ),
         ),
-        { ok: true, data: 141 },
+        { ok: true, data: 42 },
       );
 
       setStage(ctx, "repl close");
       assertEquals(
         parseToolJson<Record<string, unknown>>(
           await ctx.client.callTool(
-            { name: "repl_close", arguments: { session_id: sessionId } },
+            {
+              name: "repl_close",
+              arguments: { session_id: replacementSessionId },
+            },
             { timeout: 15000 },
           ),
         ),
@@ -528,7 +685,7 @@ Deno.test(
         await ctx.client.callTool(
           {
             name: "repl_eval",
-            arguments: { session_id: sessionId, code: "x + y" },
+            arguments: { session_id: replacementSessionId, code: "fresh" },
           },
           { timeout: 15000 },
         ),
@@ -546,6 +703,20 @@ Deno.test(
           ),
         ),
         { closed: false },
+      );
+
+      setStage(ctx, "list_skills before files");
+      const listedBeforeSkill = parseToolJson<
+        { skills: Array<Record<string, unknown>> }
+      >(
+        await ctx.client.callTool(
+          { name: "list_skills", arguments: {} },
+          { timeout: 15000 },
+        ),
+      );
+      assert(
+        !listedBeforeSkill.skills.some((skill) => skill.name === "e2e-skill"),
+        "list_skills should not discover the temporary skill before files exist",
       );
 
       setStage(ctx, "skill files");

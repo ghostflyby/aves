@@ -66,6 +66,13 @@ Deno.test("transform - export stripped", () => {
   assertEquals(inner.includes("export"), false);
 });
 
+Deno.test("transform - returns final expression", () => {
+  const names = new Set<string>();
+  names.add("x");
+  const r = transform("x + 1", names);
+  assertStringIncludes(r, "return scope.x + 1;");
+});
+
 Deno.test("transform - destructuring object", () => {
   const names = new Set<string>();
   const r = transform("const { a, b } = obj", names);
@@ -92,6 +99,15 @@ Deno.test("transform - destructuring rest", () => {
   const r = transform("const [a, ...rest] = arr", names);
   assertStringIncludes(r, "scope.a");
   assertStringIncludes(r, "scope.rest");
+});
+
+Deno.test("transform - destructuring reads temporary from scope", () => {
+  const names = new Set<string>();
+  const r = transform("const { a, b } = { a: 2, b: 3 }; a + b", names);
+  assertStringIncludes(r, "scope.__aves_tmp_");
+  assertStringIncludes(r, ".a");
+  assertStringIncludes(r, ".b");
+  assertStringIncludes(r, "return scope.a + scope.b;");
 });
 
 // ============================================================
@@ -148,11 +164,23 @@ Deno.test("rewriteRef - scope.x guard", () => {
   assertEquals(r.includes("scope.scope"), false);
 });
 
+Deno.test("rewriteRef - object literal keys are not rewritten", () => {
+  const names = new Set<string>(["a", "b"]);
+  const r = rewriteReferences("const obj = { a: b };", names);
+  assertStringIncludes(r, "{ a: scope.b }");
+  assertEquals(r.includes("scope.a:"), false);
+});
+
+Deno.test("rewriteRef - computed member property is rewritten", () => {
+  const names = new Set<string>(["obj", "key"]);
+  const r = rewriteReferences("obj[key];", names);
+  assertStringIncludes(r, "scope.obj[scope.key]");
+});
+
 // ============================================================
 // Part 3: repl-boot integration tests
-// NOTE: expressions like "42" become statements in the async
-// IIFE (not returned), so data is undefined. Declarations
-// work fine. Tests focus on functional correctness (ok/error).
+// Expressions auto-return from the async IIFE; declarations persist in scope.
+// Tests focus on child-process protocol and state behavior.
 // ============================================================
 
 const BOOT_PATH = new URL("./repl-boot.ts", import.meta.url).pathname;
