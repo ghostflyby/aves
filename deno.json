@@ -1,6 +1,6 @@
 {
   "name": "@ghostflyby/aves",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "exports": "./main.ts",
   "license": "MIT",
   "tasks": {
