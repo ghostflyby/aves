@@ -8,13 +8,21 @@ on:
 
 jobs:
   ci:
-    runs-on: ubuntu-latest
+    name: CI (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v5
       - uses: denoland/setup-deno@v2
         with:
           deno-version: "2.x"
-      - run: deno check src/
-      - run: deno lint src/
-      - run: deno fmt --check src/
-      - run: deno test --allow-read --allow-write --allow-env --allow-run --allow-ffi --allow-sys --unstable-worker-options
+      - run: deno check main.ts src/ mcp_e2e_test.ts
+      - run: deno lint .
+      - run: deno fmt --check .
+      - name: Run unit tests
+        run: deno test --allow-read --allow-write --allow-env --allow-run --allow-sys --unstable-worker-options --unstable-raw-imports main_test.ts src/
+      - name: Run MCP e2e integration test
+        run: deno test --allow-read --allow-write --allow-env --allow-run --allow-sys --unstable-worker-options --unstable-raw-imports mcp_e2e_test.ts
