@@ -17,12 +17,16 @@ import { loadPermissionModule } from "./permission-loader.ts";
  */
 
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 export const globalAbort = new AbortController();
 
-// Resolve boot.ts relative to the runner source, falling back to PWD/src.
-const _runnerDir = fileURLToPath(new URL(".", import.meta.url));
-const BOOT_PATH = fileURLToPath(new URL("./boot.ts", import.meta.url));
+export function resolveModuleSpecifier(
+  relativePath: string,
+  baseUrl = import.meta.url,
+): string {
+  return new URL(relativePath, baseUrl).href;
+}
+
+const BOOT_SPECIFIER = resolveModuleSpecifier("./boot.ts");
 
 // ============================================================
 // Default-allowed import domains (cannot go through broker —
@@ -64,7 +68,7 @@ function spawnDenoWithBroker(
     "run",
     "--no-prompt",
     "--allow-import=" + DEFAULT_IMPORT_DOMAINS.join(","),
-    BOOT_PATH,
+    BOOT_SPECIFIER,
     modulePath,
   ];
 

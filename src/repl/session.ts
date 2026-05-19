@@ -12,6 +12,7 @@ import {
 import {
   createRunBrokerPolicy,
   globalAbort,
+  resolveModuleSpecifier,
   type RunElicitContext,
 } from "../runner.ts";
 import type { Permissions } from "../types.ts";
@@ -297,7 +298,7 @@ function delay(ms: number): Promise<void> {
 // ============================================================
 
 // Resolve repl-boot.ts relative to this source, falling back to PWD/src.
-const BOOT_PATH = fileURLToPath(new URL("./repl-boot.ts", import.meta.url));
+const BOOT_SPECIFIER = resolveModuleSpecifier("./repl-boot.ts", import.meta.url);
 const DEFAULT_IMPORT_DOMAINS = [
   "deno.land:443",
   "jsr.io:443",
@@ -387,7 +388,7 @@ export async function spawnReplSession(
     "run",
     "--no-prompt",
     "--allow-import=" + DEFAULT_IMPORT_DOMAINS.join(","),
-    BOOT_PATH,
+    BOOT_SPECIFIER,
   ];
 
   const cmd = new Deno.Command("deno", {
