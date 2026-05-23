@@ -113,6 +113,9 @@ const DEFAULT_ALLOWED_ENV = new Set([
   "LC_ALL",
   "TERM",
   "AVES_IO_DIR",
+  "ESBUILD_BINARY_PATH",
+  "ESBUILD_WORKER_THREADS",
+  "NODE_V8_COVERAGE",
 ]);
 
 function resolveTempDirs(): string[] {
