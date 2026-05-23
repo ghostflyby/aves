@@ -51,7 +51,7 @@ export class ReplSession {
     {
       resolve: (v: ReplResult) => void;
       reject: (e: Error) => void;
-      timer?: number;
+      timer?: ReturnType<typeof setTimeout>;
     }
   >();
   private closed = false;
@@ -176,7 +176,7 @@ export class ReplSession {
       const pending = { resolve, reject } as {
         resolve: (v: ReplResult) => void;
         reject: (e: Error) => void;
-        timer?: number;
+        timer?: ReturnType<typeof setTimeout>;
       };
       this.resolveMap.set(id, pending);
       const msg = JSON.stringify({

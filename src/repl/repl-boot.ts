@@ -72,7 +72,7 @@ async function withTimeout<T>(
   timeoutMs?: number,
 ): Promise<T> {
   if (!timeoutMs || timeoutMs <= 0) return await promise;
-  let timer: number | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
       promise,
