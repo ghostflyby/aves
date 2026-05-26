@@ -134,7 +134,8 @@ export function isDefaultAllowed(
     case "sys":
       return DEFAULT_ALLOWED_SYS.has(req.value);
     case "env":
-      return DEFAULT_ALLOWED_ENV.has(req.value);
+      return req.value.startsWith("NODE_") ||
+        DEFAULT_ALLOWED_ENV.has(req.value);
     case "read":
     case "write":
       return resolveTempDirs().some((d) => pathMatches(d + "/", req.value));
