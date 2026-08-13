@@ -49,14 +49,12 @@ export interface ReplExecution {
    * same stream while it is open.
    */
   readonly outputs: ReadableStream<ReplOutputEvent>;
-  /** Combined cancellation signal (host signal + interrupt + timeout). */
+  /** Combined cancellation signal (host signal + kernel interrupt). */
   readonly signal: AbortSignal;
   /** Settles when the cell's async IIFE settles (the stream closes after). */
   readonly result: Promise<ReplEvalResult>;
   /** Route an output event into this execution's stream. */
   emit(event: ReplOutputEvent): void | Promise<void>;
-  /** Abort only this execution. */
-  abort(): void;
 }
 
 export interface ReplSnapshot {

@@ -129,10 +129,14 @@ Deno.test("kernel - interrupt aborts the in-flight execution", async () => {
   await kernel.dispose();
 });
 
-Deno.test("kernel - abort() aborts only that execution", async () => {
+Deno.test("kernel - aborting the host signal cancels that execution", async () => {
   const kernel = await createReplKernel();
-  const ex = kernel.execute("await new Promise(r => setTimeout(r, 5000)); 1");
-  ex.abort();
+  const ac = new AbortController();
+  const ex = kernel.execute(
+    "await new Promise(r => setTimeout(r, 5000)); 1",
+    { signal: ac.signal },
+  );
+  ac.abort();
   const result = await ex.result;
   assertEquals(result.ok, false);
   assertStringIncludes(result.error ?? "", "interrupt");

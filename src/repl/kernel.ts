@@ -134,7 +134,9 @@ export function createReplKernel(): Promise<ReplKernel> {
   const kernel: ReplKernel = {
     execute(code, options) {
       const internalAbort = new AbortController();
-      const signal = combineSignals(options?.signal, internalAbort.signal);
+      const signal = options?.signal
+        ? AbortSignal.any([options.signal, internalAbort.signal])
+        : internalAbort.signal;
       const sink = new ExecutionOutput();
       const executionId = ++executionCounter;
       let resolveResult!: (result: ReplEvalResult) => void;
@@ -165,7 +167,6 @@ export function createReplKernel(): Promise<ReplKernel> {
         signal,
         result,
         emit: (event) => sink.emit(event),
-        abort: () => internalAbort.abort(),
       } satisfies ReplExecution;
     },
 
@@ -204,33 +205,4 @@ function abortMessage(signal: AbortSignal): string {
     return "REPL eval timed out";
   }
   return "REPL eval interrupted";
-}
-
-/** Manual AbortSignal.any: combine host signal + internal interrupt signal. */
-function combineSignals(
-  ...signals: Array<AbortSignal | undefined>
-): AbortSignal {
-  const ac = new AbortController();
-  const listeners: Array<[AbortSignal, () => void]> = [];
-  const cleanup = () => {
-    for (const [signal, fn] of listeners) {
-      signal.removeEventListener("abort", fn);
-    }
-    listeners.length = 0;
-  };
-  for (const signal of signals) {
-    if (!signal) continue;
-    if (signal.aborted) {
-      cleanup();
-      ac.abort(signal.reason);
-      return ac.signal;
-    }
-    const fn = () => {
-      cleanup();
-      ac.abort(signal.reason);
-    };
-    listeners.push([signal, fn]);
-    signal.addEventListener("abort", fn, { once: true });
-  }
-  return ac.signal;
 }
