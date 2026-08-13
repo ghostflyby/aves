@@ -3,8 +3,9 @@
 //
 // In-process evaluation kernel. Executions run serially (FIFO) on
 // a shared persistent scope; each execution exposes a pull-based
-// output stream plus an `emit` port for host-routed events
-// (console capture, Deno.jupyter.display, ...). The kernel owns NO
+// output stream plus an `emit` port for host-routed events (console
+// capture, Deno.jupyter.display, ...) and a resident AbortController
+// as its cancellation handle + event source. The kernel owns NO
 // child process and installs NO globals — hosts decide the process,
 // the supervision, and any global wiring (design doc §5.3).
 // ============================================================
@@ -83,17 +84,17 @@ class ExecutionOutput {
 
 interface QueueItem {
   code: string;
-  signal: AbortSignal;
+  controller: AbortController;
   sink: ExecutionOutput;
   resolveResult: (result: ReplEvalResult) => void;
-  internalAbort: AbortController;
+  execution: ReplExecution;
 }
 
 export function createReplKernel(): Promise<ReplKernel> {
   const engine = new EvalEngine();
   const queue: QueueItem[] = [];
   let running = false;
-  let current: QueueItem | null = null;
+  let currentExecution: ReplExecution | null = null;
   let executionCounter = 0;
   let disposed = false;
 
@@ -103,9 +104,9 @@ export function createReplKernel(): Promise<ReplKernel> {
     try {
       while (queue.length > 0 && !disposed) {
         const item = queue.shift()!;
-        current = item;
+        currentExecution = item.execution;
         await runOne(item);
-        current = null;
+        currentExecution = null;
       }
     } finally {
       running = false;
@@ -113,13 +114,18 @@ export function createReplKernel(): Promise<ReplKernel> {
   }
 
   async function runOne(item: QueueItem): Promise<void> {
-    if (item.signal.aborted) {
-      item.resolveResult({ ok: false, error: abortMessage(item.signal) });
+    if (item.controller.signal.aborted) {
+      item.resolveResult({
+        ok: false,
+        error: abortMessage(item.controller.signal),
+      });
       item.sink.close();
       return;
     }
     try {
-      const data = await engine.runCell(item.code, { signal: item.signal });
+      const data = await engine.runCell(item.code, {
+        signal: item.controller.signal,
+      });
       item.resolveResult({ ok: true, data });
     } catch (err) {
       item.resolveResult({
@@ -132,23 +138,51 @@ export function createReplKernel(): Promise<ReplKernel> {
   }
 
   const kernel: ReplKernel = {
+    get current() {
+      return currentExecution;
+    },
+
     execute(code, options) {
-      const internalAbort = new AbortController();
-      const signal = options?.signal
-        ? AbortSignal.any([options.signal, internalAbort.signal])
-        : internalAbort.signal;
+      const controller = new AbortController();
       const sink = new ExecutionOutput();
       const executionId = ++executionCounter;
       let resolveResult!: (result: ReplEvalResult) => void;
       const result = new Promise<ReplEvalResult>((resolve) => {
         resolveResult = resolve;
       });
+
+      // External cancellation token -> this execution's controller. Every
+      // cancellation source (host signal, controller.abort(), interrupt(),
+      // dispose) is observed on the single controller.signal. The listener is
+      // detached when the execution settles so long-lived host signals do not
+      // leak listeners (their abort then cannot affect this execution).
+      const hostSignal = options?.signal;
+      const onHostAbort = () => controller.abort(hostSignal?.reason);
+      if (hostSignal) {
+        if (hostSignal.aborted) {
+          controller.abort(hostSignal.reason);
+        } else {
+          hostSignal.addEventListener("abort", onHostAbort, { once: true });
+          result.finally(() => {
+            hostSignal.removeEventListener("abort", onHostAbort);
+          }).catch(() => {});
+        }
+      }
+
+      const execution: ReplExecution = {
+        executionId,
+        outputs: sink.stream,
+        controller,
+        signal: controller.signal,
+        result,
+        emit: (event) => sink.emit(event),
+      };
       const item: QueueItem = {
         code,
-        signal,
+        controller,
         sink,
         resolveResult,
-        internalAbort,
+        execution,
       };
 
       if (disposed) {
@@ -161,17 +195,11 @@ export function createReplKernel(): Promise<ReplKernel> {
         void pump();
       }
 
-      return {
-        executionId,
-        outputs: sink.stream,
-        signal,
-        result,
-        emit: (event) => sink.emit(event),
-      } satisfies ReplExecution;
+      return execution;
     },
 
     interrupt() {
-      current?.internalAbort.abort();
+      currentExecution?.controller.abort();
     },
 
     snapshot() {
@@ -185,7 +213,7 @@ export function createReplKernel(): Promise<ReplKernel> {
     dispose() {
       if (disposed) return Promise.resolve();
       disposed = true;
-      current?.internalAbort.abort();
+      currentExecution?.controller.abort();
       const pending = queue.splice(0);
       for (const item of pending) {
         item.resolveResult({ ok: false, error: "kernel disposed" });

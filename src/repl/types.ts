@@ -49,7 +49,15 @@ export interface ReplExecution {
    * same stream while it is open.
    */
   readonly outputs: ReadableStream<ReplOutputEvent>;
-  /** Combined cancellation signal (host signal + kernel interrupt). */
+  /**
+   * This execution's resident AbortController. `signal` is `controller.signal`,
+   * so `controller` is both the handle to cancel this execution after the fact
+   * and a reliable cancellation event source: every cancellation source —
+   * the external `{ signal }` token, a direct `controller.abort()`,
+   * `kernel.interrupt()`, or `dispose()` — is observed on `controller.signal`.
+   */
+  readonly controller: AbortController;
+  /** This execution's cancellation signal (`=== controller.signal`). */
   readonly signal: AbortSignal;
   /** Settles when the cell's async IIFE settles (the stream closes after). */
   readonly result: Promise<ReplEvalResult>;
@@ -68,11 +76,17 @@ export interface ReplKernel {
   /**
    * Queue and run one cell. Returns immediately; executions run serially
    * (FIFO) because they share the persistent scope. Top-level await is
-   * supported. Cancellation: pass `{ signal }`, `AbortSignal.timeout(ms)`, or
-   * use `interrupt()`.
+   * supported. Cancellation: pass `{ signal }`, `AbortSignal.timeout(ms)`,
+   * `execution.controller.abort()`, or use `interrupt()`.
    */
   execute(code: string, options?: { signal?: AbortSignal }): ReplExecution;
-  /** Abort the in-flight execution (Jupyter interrupt_request counterpart). */
+  /**
+   * The in-flight execution, or `null` when idle. References the execution
+   * object that was running when the queue advanced, so it never points at a
+   * newly queued execution.
+   */
+  readonly current: ReplExecution | null;
+  /** Abort the in-flight execution (`=== current?.controller.abort()`). */
   interrupt(): void;
   snapshot(): ReplSnapshot;
   /** Clear scope + declared names (restart without process respawn). */

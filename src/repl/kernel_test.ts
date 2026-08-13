@@ -7,7 +7,11 @@
 // No child processes are involved.
 // ============================================================
 
-import { assertEquals, assertStringIncludes } from "@std/assert";
+import {
+  assertEquals,
+  assertStrictEquals,
+  assertStringIncludes,
+} from "@std/assert";
 import { createReplKernel } from "./kernel.ts";
 import type {
   ReplEvalResult,
@@ -140,6 +144,62 @@ Deno.test("kernel - aborting the host signal cancels that execution", async () =
   const result = await ex.result;
   assertEquals(result.ok, false);
   assertStringIncludes(result.error ?? "", "interrupt");
+  await kernel.dispose();
+});
+
+Deno.test("kernel - controller.abort() cancels the execution", async () => {
+  const kernel = await createReplKernel();
+  const ex = kernel.execute("await new Promise(r => setTimeout(r, 5000)); 1");
+  ex.controller.abort();
+  const result = await ex.result;
+  assertEquals(result.ok, false);
+  assertStringIncludes(result.error ?? "", "interrupt");
+  await kernel.dispose();
+});
+
+Deno.test("kernel - host signal abort propagates to controller.signal", async () => {
+  const kernel = await createReplKernel();
+  const ac = new AbortController();
+  const ex = kernel.execute(
+    "await new Promise(r => setTimeout(r, 5000)); 1",
+    { signal: ac.signal },
+  );
+  ac.abort();
+  // The external token's abort is observable on the execution's own signal.
+  assertEquals(ex.signal.aborted, true);
+  const result = await ex.result;
+  assertEquals(result.ok, false);
+  await kernel.dispose();
+});
+
+Deno.test("kernel - current points to the in-flight execution", async () => {
+  const kernel = await createReplKernel();
+  const ex = kernel.execute(
+    "await new Promise(r => setTimeout(r, 40)); 1",
+  );
+  // A queued second execution must not become `current` while the first runs.
+  const queued = kernel.execute("2");
+  // Identity, not deep equality: `current` references the exact handle.
+  assertStrictEquals(kernel.current, ex);
+  assertStrictEquals(kernel.current === queued, false);
+  await ex.result;
+  await queued.result;
+  // Let the pump finish its loop (it nulls `current` after the last runOne).
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assertStrictEquals(kernel.current, null);
+  await kernel.dispose();
+});
+
+Deno.test("kernel - detaches host signal listener after settle", async () => {
+  const kernel = await createReplKernel();
+  const hostAc = new AbortController();
+  const ex = kernel.execute("1 + 1", { signal: hostAc.signal });
+  const result = await ex.result;
+  assertEquals(result.ok, true);
+  // After settle the bridge listener is gone: aborting the long-lived host
+  // signal must not abort this (finished) execution's controller.
+  hostAc.abort();
+  assertEquals(ex.controller.signal.aborted, false);
   await kernel.dispose();
 });
 
