@@ -6,7 +6,12 @@ import { z } from "zod";
 
 export const ScriptModeSchema = z.enum(["eval", "module", "skill"]);
 
-export const PermissionsSchema = z.object({
+export const PermissionsSchema: z.ZodType<{
+  read?: string[];
+  write?: string[];
+  net?: string[];
+  env?: string[];
+}> = z.object({
   read: z.array(z.string()).optional(),
   write: z.array(z.string()).optional(),
   net: z.array(z.string()).optional(),

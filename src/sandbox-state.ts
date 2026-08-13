@@ -9,12 +9,30 @@ import { z } from "zod";
 // Zod schemas — matching real Codex "codex/sandbox-state-meta" JSON
 // ============================================================
 
-const SandboxPathLiteralSchema = z.object({
+// Zod schemas — matching real Codex "codex/sandbox-state-meta" JSON.
+// Explicit output-type annotations keep the schemas' inferred types stable
+// and satisfy Deno's no-slow-types public-API lint. z.union is used instead
+// of z.discriminatedUnion so the member schemas can carry plain z.ZodType
+// annotations (behaviour is identical for these literal discriminators).
+
+type SandboxPathLiteralData = { type: "path"; path: string };
+
+type SandboxPathSpecialData = {
+  type: "special";
+  value: {
+    kind: "root" | "project_roots" | "slash_tmp" | "tmpdir";
+    subpath?: string;
+  };
+};
+
+type SandboxPathEntryData = SandboxPathLiteralData | SandboxPathSpecialData;
+
+const SandboxPathLiteralSchema: z.ZodType<SandboxPathLiteralData> = z.object({
   type: z.literal("path"),
   path: z.string(),
 });
 
-const SandboxPathSpecialSchema = z.object({
+const SandboxPathSpecialSchema: z.ZodType<SandboxPathSpecialData> = z.object({
   type: z.literal("special"),
   value: z.object({
     kind: z.enum(["root", "project_roots", "slash_tmp", "tmpdir"]),
@@ -22,17 +40,30 @@ const SandboxPathSpecialSchema = z.object({
   }),
 });
 
-const SandboxPathEntrySchema = z.discriminatedUnion("type", [
+const SandboxPathEntrySchema: z.ZodType<SandboxPathEntryData> = z.union([
   SandboxPathLiteralSchema,
   SandboxPathSpecialSchema,
 ]);
 
-const FileSystemEntrySchema = z.object({
+const FileSystemEntrySchema: z.ZodType<{
+  path: SandboxPathEntryData;
+  access: "read" | "write" | "none";
+}> = z.object({
   path: SandboxPathEntrySchema,
   access: z.enum(["read", "write", "none"]),
 });
 
-const PermissionProfileSchema = z.object({
+const PermissionProfileSchema: z.ZodType<{
+  type: "managed";
+  file_system: {
+    type: "restricted" | "unrestricted";
+    entries: Array<{
+      path: SandboxPathEntryData;
+      access: "read" | "write" | "none";
+    }>;
+  };
+  network: string;
+}> = z.object({
   type: z.literal("managed"),
   file_system: z.object({
     type: z.enum(["restricted", "unrestricted"]),
@@ -41,7 +72,13 @@ const PermissionProfileSchema = z.object({
   network: z.string(),
 });
 
-const SandboxPolicySchema = z.object({
+const SandboxPolicySchema: z.ZodType<{
+  type: string;
+  writable_roots: string[];
+  network_access: boolean;
+  exclude_tmpdir_env_var: boolean;
+  exclude_slash_tmp: boolean;
+}> = z.object({
   type: z.string(),
   writable_roots: z.array(z.string()),
   network_access: z.boolean(),
@@ -49,7 +86,29 @@ const SandboxPolicySchema = z.object({
   exclude_slash_tmp: z.boolean(),
 });
 
-const SandboxStateMetaSchema = z.object({
+const SandboxStateMetaSchema: z.ZodType<{
+  permissionProfile: {
+    type: "managed";
+    file_system: {
+      type: "restricted" | "unrestricted";
+      entries: Array<{
+        path: SandboxPathEntryData;
+        access: "read" | "write" | "none";
+      }>;
+    };
+    network: string;
+  };
+  sandboxPolicy: {
+    type: string;
+    writable_roots: string[];
+    network_access: boolean;
+    exclude_tmpdir_env_var: boolean;
+    exclude_slash_tmp: boolean;
+  };
+  codexLinuxSandboxExe: string | null;
+  sandboxCwd: string;
+  useLegacyLandlock: boolean;
+}> = z.object({
   permissionProfile: PermissionProfileSchema,
   sandboxPolicy: SandboxPolicySchema,
   codexLinuxSandboxExe: z.string().nullable(),

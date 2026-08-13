@@ -76,4 +76,4 @@ export class ReplManager {
   }
 }
 
-export const replManager = new ReplManager();
+export const replManager: ReplManager = new ReplManager();
