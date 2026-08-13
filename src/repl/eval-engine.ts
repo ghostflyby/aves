@@ -1,10 +1,12 @@
 // ============================================================
 // src/repl/eval-engine.ts — in-process evaluation engine
 //
-// Owns the persistent scope, the esbuild+AST transform pipeline,
-// the AsyncFunction wrapper (top-level await), and the optional
-// prompt/confirm + console capture installs. This is the SDK core:
-// it knows nothing about processes, protocols, or permissions.
+// Owns the persistent scope and the esbuild-wasm + AST transform
+// pipeline behind the AsyncFunction wrapper (top-level await). The
+// engine is a pure evaluator: it installs no globals and emits no
+// events — output routing (console.*, Deno.jupyter.*, prompt) is
+// host-owned and wired to ReplExecution.emit via the SDK utils
+// (design doc §5.2).
 // ============================================================
 
 import esbuildWasmCjs from "esbuild-wasm/lib/browser.js";
@@ -31,8 +33,8 @@ const esbuildWasm = esbuildWasmCjs as unknown as {
  * grant that one read (or route it through their permission broker).
  *
  * esbuild-wasm's initialize() may only run once per process, so the resolved
- * backend is memoised at module scope — all kernels/engines in a process share
- * the single WASM service.
+ * transform is memoised at module scope — all engines in a process share the
+ * single WASM service.
  */
 let transformPromise: Promise<TransformFn> | null = null;
 
@@ -54,54 +56,22 @@ function getTransform(): Promise<TransformFn> {
   return transformPromise;
 }
 
-export interface EvalEngineOptions {
-  /** "protocol" mode wraps console.* so output lands in emit events. */
-  consoleCapture?: "protocol" | "sideband" | "off";
-  /** Bind globalThis.prompt/confirm to requestInput. */
-  installPrompt?: boolean;
-  /** Route captured stdout/stderr events here. */
-  emit(event: { kind: "stdout" | "stderr"; text: string }): void;
-  requestInput(prompt: string, password: boolean): Promise<string>;
-}
-
 export class EvalEngine {
   readonly scope: Record<string, unknown> = {};
   readonly declaredNames: Set<string> = new Set();
-
-  private transformPromise: Promise<TransformFn> | null = null;
-  private emitFn: EvalEngineOptions["emit"];
-  private requestInput: EvalEngineOptions["requestInput"];
-  private consoleWrappers = new Map<
-    keyof Console,
-    (...args: unknown[]) => void
-  >();
-  private installedPrompt = false;
   private disposed = false;
-
-  constructor(options: EvalEngineOptions) {
-    this.emitFn = options.emit;
-    this.requestInput = options.requestInput;
-    if (options.consoleCapture === "protocol") this.installConsoleCapture();
-    if (options.installPrompt) this.installPromptBindings();
-  }
-
-  /** Lazily resolve the process-global transform backend once per engine. */
-  private getTransform(): Promise<TransformFn> {
-    if (!this.transformPromise) {
-      this.transformPromise = getTransform();
-    }
-    return this.transformPromise;
-  }
 
   /**
    * Transform + evaluate one cell in the persistent scope. Rejects on
-   * transform/parse errors, runtime errors, timeout, or interrupt.
+   * transform/parse errors, runtime errors, or abort (signal).
    */
   async runCell(
     code: string,
-    options?: { timeoutMs?: number; signal?: AbortSignal },
+    options?: { signal?: AbortSignal },
   ): Promise<unknown> {
-    const t = await this.getTransform();
+    if (this.disposed) throw new Error("REPL engine disposed");
+    if (options?.signal?.aborted) throw abortError(options.signal);
+    const t = await getTransform();
     const esm = await t(code, { loader: "ts", format: "esm" });
     const wrapped = transform(esm.code, this.declaredNames);
     const AF = Object.getPrototypeOf(async function () {}).constructor as new (
@@ -109,20 +79,16 @@ export class EvalEngine {
     ) => (...args: unknown[]) => Promise<unknown>;
     const fn = new AF("scope", wrapped);
     const resultPromise = fn(this.scope);
-    return await raceWithTimeoutAndAbort(
-      resultPromise,
-      options?.timeoutMs,
-      options?.signal,
-    );
+    return await raceWithAbort(resultPromise, options?.signal);
   }
 
   /** Persistent scope snapshot (declared names + value reference). */
-  snapshot(): { declaredNames: string[]; values: Record<string, unknown> } {
+  snapshot(): { names: string[]; values: Record<string, unknown> } {
     const values: Record<string, unknown> = {};
     for (const name of this.declaredNames) {
       if (name in this.scope) values[name] = this.scope[name];
     }
-    return { declaredNames: [...this.declaredNames], values };
+    return { names: [...this.declaredNames], values };
   }
 
   /** Clear scope + declared names (restart without process respawn). */
@@ -131,113 +97,34 @@ export class EvalEngine {
     this.declaredNames.clear();
   }
 
-  /** Restore console wrappers; release transform state. */
   dispose(): void {
-    if (this.disposed) return;
     this.disposed = true;
-    this.restoreConsole();
-    if (this.installedPrompt) this.restorePromptBindings();
-    this.transformPromise = null;
-  }
-
-  private installConsoleCapture(): void {
-    const mapping: Array<[keyof Console, "stdout" | "stderr"]> = [
-      ["log", "stdout"],
-      ["info", "stdout"],
-      ["debug", "stdout"],
-      ["warn", "stderr"],
-      ["error", "stderr"],
-    ];
-    for (const [method, kind] of mapping) {
-      const original = console[method];
-      if (typeof original !== "function") continue;
-      const wrapper = (...args: unknown[]) => {
-        if (this.disposed) {
-          (original as (...a: unknown[]) => void).apply(console, args);
-          return;
-        }
-        this.emitFn({ kind, text: args.map(formatConsoleArg).join(" ") });
-      };
-      this.consoleWrappers.set(method, wrapper);
-      console[method] = wrapper as typeof console.log;
-    }
-  }
-
-  private restoreConsole(): void {
-    for (const [method, wrapper] of this.consoleWrappers) {
-      // Deno's console methods are plain writable properties.
-      (console as Record<keyof Console, unknown>)[method] = wrapper;
-    }
-    this.consoleWrappers.clear();
-  }
-
-  private installPromptBindings(): void {
-    const g = globalThis as Record<string, unknown>;
-    const prompt = (message?: string) =>
-      this.requestInput(String(message ?? ""), false);
-    const confirm = async (message?: string) => {
-      const answer = (await this.requestInput(String(message ?? ""), false))
-        .trim()
-        .toLowerCase();
-      return answer !== "" && answer !== "0" && answer !== "no" &&
-        answer !== "false";
-    };
-    g.prompt = prompt;
-    g.confirm = confirm;
-    this.installedPrompt = true;
-  }
-
-  private restorePromptBindings(): void {
-    const g = globalThis as Record<string, unknown>;
-    delete g.prompt;
-    delete g.confirm;
   }
 }
 
-function formatConsoleArg(value: unknown): string {
-  if (typeof value === "string") return value;
-  try {
-    return Deno.inspect(value, { colors: false }) ?? String(value);
-  } catch {
-    return String(value);
+function abortError(signal: AbortSignal): Error {
+  const reason = signal.reason;
+  if (reason instanceof DOMException && reason.name === "TimeoutError") {
+    return new Error("REPL eval timed out");
   }
+  return new Error("REPL eval interrupted");
 }
 
-async function raceWithTimeoutAndAbort<T>(
+async function raceWithAbort<T>(
   promise: Promise<T>,
-  timeoutMs?: number,
   signal?: AbortSignal,
 ): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    const racers: Promise<T>[] = [promise];
-    if (timeoutMs && timeoutMs > 0) {
-      racers.push(
-        new Promise<never>((_, reject) => {
-          timer = setTimeout(
-            () => reject(new Error("REPL eval timed out")),
-            timeoutMs,
-          );
-        }),
-      );
-    }
-    if (signal) {
-      racers.push(
-        new Promise<never>((_, reject) => {
-          if (signal.aborted) {
-            reject(new Error("REPL eval interrupted"));
-            return;
-          }
-          signal.addEventListener(
-            "abort",
-            () => reject(new Error("REPL eval interrupted")),
-            { once: true },
-          );
-        }),
-      );
-    }
-    return await Promise.race(racers);
-  } finally {
-    if (timer !== undefined) clearTimeout(timer);
-  }
+  if (!signal) return await promise;
+  return await Promise.race([
+    promise,
+    new Promise<never>((_, reject) => {
+      if (signal.aborted) {
+        reject(abortError(signal));
+        return;
+      }
+      signal.addEventListener("abort", () => reject(abortError(signal)), {
+        once: true,
+      });
+    }),
+  ]);
 }

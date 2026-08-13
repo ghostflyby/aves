@@ -1,196 +1,202 @@
 // ============================================================
 // src/repl/kernel_test.ts — createReplKernel unit tests
 //
-// Exercises the in-process kernel against a fake ReplRuntime:
-// scope persistence, top-level await, console capture modes,
-// prompt round-trip, interrupt, reset, and timeout. No child
-// processes are involved.
+// Exercises the in-process kernel: FIFO serialization, scope
+// persistence, top-level await, per-execution output streams,
+// emit port, interrupt, AbortSignal cancellation, snapshot/reset.
+// No child processes are involved.
 // ============================================================
 
 import { assertEquals, assertStringIncludes } from "@std/assert";
 import { createReplKernel } from "./kernel.ts";
-import type { ReplOutputEvent, ReplRuntime } from "./types.ts";
+import type {
+  ReplEvalResult,
+  ReplExecution,
+  ReplOutputEvent,
+} from "./types.ts";
 
-interface FakeRuntimeOpts {
-  onEmit?: (event: ReplOutputEvent) => void;
-  inputAnswer?: string;
-  inputHook?: (prompt: string, password: boolean) => Promise<string>;
+async function collect(ex: ReplExecution): Promise<ReplOutputEvent[]> {
+  const events: ReplOutputEvent[] = [];
+  await ex.outputs.pipeTo(
+    new WritableStream<ReplOutputEvent>({
+      write(event) {
+        events.push(event);
+      },
+    }),
+  );
+  return events;
 }
 
-function makeRuntime(opts: FakeRuntimeOpts = {}): {
-  runtime: ReplRuntime;
-  emitted: ReplOutputEvent[];
-  inputRequests: Array<{ prompt: string; password: boolean }>;
-  evalStarts: number;
-  evalEnds: number;
-} {
-  const emitted: ReplOutputEvent[] = [];
-  const inputRequests: Array<{ prompt: string; password: boolean }> = [];
-  const state = {
-    runtime: {
-      emit: (event: ReplOutputEvent) => {
-        emitted.push(event);
-        opts.onEmit?.(event);
-      },
-      requestInput: (prompt: string, password: boolean) => {
-        inputRequests.push({ prompt, password });
-        return opts.inputHook
-          ? opts.inputHook(prompt, password)
-          : Promise.resolve(opts.inputAnswer ?? "");
-      },
-      onEvalStart: () => {
-        state.evalStarts++;
-      },
-      onEvalEnd: () => {
-        state.evalEnds++;
-      },
-    } as ReplRuntime,
-    emitted,
-    inputRequests,
-    evalStarts: 0,
-    evalEnds: 0,
-  };
-  return state;
+async function evalCollect(
+  kernel: {
+    execute(code: string, options?: { signal?: AbortSignal }): ReplExecution;
+  },
+  code: string,
+  options?: { signal?: AbortSignal },
+): Promise<{ result: ReplEvalResult; events: ReplOutputEvent[] }> {
+  const ex = kernel.execute(code, options);
+  const eventsP = collect(ex);
+  const result = await ex.result;
+  return { result, events: await eventsP };
 }
 
 Deno.test("kernel - persists declarations across evals", async () => {
-  const { runtime } = makeRuntime();
-  const kernel = await createReplKernel({ runtime });
-  const r1 = await kernel.eval("const x = 1");
-  assertEquals(r1.ok, true);
-  const r2 = await kernel.eval("x + 1");
-  assertEquals(r2.ok, true);
-  assertEquals(r2.data, 2);
+  const kernel = await createReplKernel();
+  const r1 = await evalCollect(kernel, "const x = 1");
+  assertEquals(r1.result.ok, true);
+  const r2 = await evalCollect(kernel, "x + 1");
+  assertEquals(r2.result.ok, true);
+  assertEquals(r2.result.data, 2);
   await kernel.dispose();
 });
 
 Deno.test("kernel - auto-returns final expression", async () => {
-  const { runtime } = makeRuntime();
-  const kernel = await createReplKernel({ runtime });
-  const r = await kernel.eval("1 + 1");
-  assertEquals(r.ok, true);
-  assertEquals(r.data, 2);
+  const kernel = await createReplKernel();
+  const { result } = await evalCollect(kernel, "1 + 1");
+  assertEquals(result.ok, true);
+  assertEquals(result.data, 2);
   await kernel.dispose();
 });
 
 Deno.test("kernel - top-level await", async () => {
-  const { runtime } = makeRuntime();
-  const kernel = await createReplKernel({ runtime });
-  const r = await kernel.eval("const p = await Promise.resolve(99); p + 1");
-  assertEquals(r.ok, true);
-  assertEquals(r.data, 100);
+  const kernel = await createReplKernel();
+  const { result } = await evalCollect(
+    kernel,
+    "const p = await Promise.resolve(99); p + 1",
+  );
+  assertEquals(result.ok, true);
+  assertEquals(result.data, 100);
   await kernel.dispose();
 });
 
 Deno.test("kernel - runtime error yields ok:false with message", async () => {
-  const { runtime } = makeRuntime();
-  const kernel = await createReplKernel({ runtime });
-  const r = await kernel.eval('throw new Error("boom")');
-  assertEquals(r.ok, false);
-  assertStringIncludes(r.error ?? "", "boom");
+  const kernel = await createReplKernel();
+  const { result } = await evalCollect(kernel, 'throw new Error("boom")');
+  assertEquals(result.ok, false);
+  assertStringIncludes(result.error ?? "", "boom");
   await kernel.dispose();
 });
 
 Deno.test("kernel - class declaration persists across evals", async () => {
-  const { runtime } = makeRuntime();
-  const kernel = await createReplKernel({ runtime });
-  const r1 = await kernel.eval("class Foo { static v = 42 }");
-  assertEquals(r1.ok, true);
-  const r2 = await kernel.eval("Foo.v");
-  assertEquals(r2.ok, true);
-  assertEquals(r2.data, 42);
+  const kernel = await createReplKernel();
+  const r1 = await evalCollect(kernel, "class Foo { static v = 42 }");
+  assertEquals(r1.result.ok, true);
+  const r2 = await evalCollect(kernel, "Foo.v");
+  assertEquals(r2.result.ok, true);
+  assertEquals(r2.result.data, 42);
   await kernel.dispose();
 });
 
-Deno.test("kernel - consoleCapture protocol routes console.log to stdout events", async () => {
-  const { runtime, emitted } = makeRuntime();
-  const kernel = await createReplKernel({
-    runtime,
-    consoleCapture: "protocol",
-  });
-  const r = await kernel.eval('console.log("hello", 42); 1');
-  assertEquals(r.ok, true);
-  const stdoutEvents = emitted.filter((e) => e.kind === "stdout");
-  assertEquals(stdoutEvents.length, 1);
-  assertStringIncludes((stdoutEvents[0] as { text: string }).text, "hello");
+Deno.test("kernel - emit routes events into the execution stream", async () => {
+  const kernel = await createReplKernel();
+  const ex = kernel.execute("await new Promise(r => setTimeout(r, 20)); 1");
+  ex.emit({ kind: "stdout", text: "hello" });
+  ex.emit({ kind: "display", data: { "text/html": "<b>x</b>" }, metadata: {} });
+  const result = await ex.result;
+  const events = await collect(ex);
+  assertEquals(result.ok, true);
+  assertEquals(result.data, 1);
+  assertEquals(events, [
+    { kind: "stdout", text: "hello" },
+    { kind: "display", data: { "text/html": "<b>x</b>" }, metadata: {} },
+  ]);
   await kernel.dispose();
 });
 
-Deno.test("kernel - consoleCapture off leaves console untouched", async () => {
-  const { runtime, emitted } = makeRuntime();
-  const kernel = await createReplKernel({ runtime, consoleCapture: "off" });
-  const r = await kernel.eval('console.log("silent"); 1');
-  assertEquals(r.ok, true);
-  assertEquals(emitted.filter((e) => e.kind === "stdout").length, 0);
-  await kernel.dispose();
-});
-
-Deno.test("kernel - prompt round-trips through runtime.requestInput", async () => {
-  const { runtime, inputRequests } = makeRuntime({ inputAnswer: "42" });
-  const kernel = await createReplKernel({ runtime, installPrompt: true });
-  // requestInput is asynchronous (e.g. a Jupyter input_request round-trip),
-  // so the installed prompt()/confirm() return promises user code must await.
-  const r = await kernel.eval("const v = await prompt('num?'); Number(v) + 1");
-  assertEquals(r.ok, true);
-  assertEquals(inputRequests.length, 1);
-  assertEquals(inputRequests[0].prompt, "num?");
-  assertEquals(inputRequests[0].password, false);
-  assertEquals(r.data, 43);
-  await kernel.dispose();
-});
-
-Deno.test("kernel - interrupt rejects the in-flight eval", async () => {
-  const { runtime } = makeRuntime();
-  const kernel = await createReplKernel({ runtime });
-  const p = kernel.eval("await new Promise(r => setTimeout(r, 5000)); 1");
-  setTimeout(() => kernel.interrupt(), 50);
-  const r = await p;
-  assertEquals(r.ok, false);
-  assertStringIncludes(r.error ?? "", "interrupt");
-  await kernel.dispose();
-});
-
-Deno.test("kernel - timeout rejects with ok:false", async () => {
-  const { runtime } = makeRuntime();
-  const kernel = await createReplKernel({ runtime });
-  const r = await kernel.eval(
-    "await new Promise(r => setTimeout(r, 5000)); 1",
-    { timeoutMs: 50 },
+Deno.test("kernel - FIFO serialization across queued executions", async () => {
+  const kernel = await createReplKernel();
+  await evalCollect(kernel, "const log: string[] = []");
+  const a = kernel.execute(
+    "log.push('a-start'); await new Promise(r => setTimeout(r, 30)); log.push('a-end'); 1",
   );
-  assertEquals(r.ok, false);
-  assertStringIncludes(r.error ?? "", "timed out");
+  const b = kernel.execute("log.push('b'); 2");
+  await a.result;
+  await b.result;
+  const r = await evalCollect(kernel, "log.join(',')");
+  assertEquals(r.result.data, "a-start,a-end,b");
+  await kernel.dispose();
+});
+
+Deno.test("kernel - interrupt aborts the in-flight execution", async () => {
+  const kernel = await createReplKernel();
+  const ex = kernel.execute(
+    "await new Promise(r => setTimeout(r, 5000)); 1",
+  );
+  setTimeout(() => kernel.interrupt(), 30);
+  const result = await ex.result;
+  assertEquals(result.ok, false);
+  assertStringIncludes(result.error ?? "", "interrupt");
+  await kernel.dispose();
+});
+
+Deno.test("kernel - abort() aborts only that execution", async () => {
+  const kernel = await createReplKernel();
+  const ex = kernel.execute("await new Promise(r => setTimeout(r, 5000)); 1");
+  ex.abort();
+  const result = await ex.result;
+  assertEquals(result.ok, false);
+  assertStringIncludes(result.error ?? "", "interrupt");
+  await kernel.dispose();
+});
+
+Deno.test("kernel - AbortSignal.timeout aborts with timeout message", async () => {
+  const kernel = await createReplKernel();
+  const ex = kernel.execute(
+    "await new Promise(r => setTimeout(r, 5000)); 1",
+    { signal: AbortSignal.timeout(30) },
+  );
+  const result = await ex.result;
+  assertEquals(result.ok, false);
+  assertStringIncludes(result.error ?? "", "timed out");
+  await kernel.dispose();
+});
+
+Deno.test("kernel - pre-aborted signal skips the execution", async () => {
+  const kernel = await createReplKernel();
+  const ac = new AbortController();
+  ac.abort();
+  const ex = kernel.execute("1", { signal: ac.signal });
+  const result = await ex.result;
+  assertEquals(result.ok, false);
+  await kernel.dispose();
+});
+
+Deno.test("kernel - executionId increments monotonically", async () => {
+  const kernel = await createReplKernel();
+  const a = kernel.execute("1");
+  const b = kernel.execute("2");
+  await a.result;
+  await b.result;
+  assertEquals(b.executionId, a.executionId + 1);
   await kernel.dispose();
 });
 
 Deno.test("kernel - snapshot returns declared names and values", async () => {
-  const { runtime } = makeRuntime();
-  const kernel = await createReplKernel({ runtime });
-  await kernel.eval("const a = 1; let b = 2;");
+  const kernel = await createReplKernel();
+  await evalCollect(kernel, "const a = 1; let b = 2");
   const snap = kernel.snapshot();
-  assertEquals(snap.declaredNames.includes("a"), true);
-  assertEquals(snap.declaredNames.includes("b"), true);
+  assertEquals(snap.names.includes("a"), true);
+  assertEquals(snap.names.includes("b"), true);
   assertEquals(snap.values.a, 1);
   await kernel.dispose();
 });
 
 Deno.test("kernel - reset clears scope and names", async () => {
-  const { runtime } = makeRuntime();
-  const kernel = await createReplKernel({ runtime });
-  await kernel.eval("const a = 1");
+  const kernel = await createReplKernel();
+  await evalCollect(kernel, "const a = 1");
   kernel.reset();
-  const r = await kernel.eval("typeof a");
-  assertEquals(r.ok, true);
-  assertEquals(r.data, "undefined");
+  const r = await evalCollect(kernel, "typeof a");
+  assertEquals(r.result.ok, true);
+  assertEquals(r.result.data, "undefined");
   await kernel.dispose();
 });
 
-Deno.test("kernel - busy/idle hooks fire around eval", async () => {
-  const state = makeRuntime();
-  const kernel = await createReplKernel({ runtime: state.runtime });
-  await kernel.eval("1");
-  // Read counters off the state object — destructuring would copy the
-  // pre-eval primitives.
-  assertEquals(state.evalStarts, 1);
-  assertEquals(state.evalEnds, 1);
+Deno.test("kernel - dispose rejects pending and future executions", async () => {
+  const kernel = await createReplKernel();
+  const ex = kernel.execute("await new Promise(r => setTimeout(r, 5000)); 1");
   await kernel.dispose();
+  const result = await ex.result;
+  assertEquals(result.ok, false);
+  const after = kernel.execute("1");
+  assertEquals((await after.result).ok, false);
 });

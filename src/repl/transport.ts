@@ -6,10 +6,10 @@
 // `result` / `close` / `closed` / `timeout_ms` lines and drives a
 // ReplKernel, but never spawns or supervises a process (design
 // doc §5.4). The wire protocol is byte-identical to Aves' legacy
-// repl-boot child.
+// repl-boot child; `timeout_ms` maps to an AbortSignal.timeout.
 // ============================================================
 
-import type { ReplEvalResult, ReplKernel } from "./types.ts";
+import type { ReplEvalResult } from "./types.ts";
 
 interface StdioReader {
   read(buf: Uint8Array): Promise<number | null>;
@@ -19,6 +19,14 @@ interface StdioWriter {
   write(buf: Uint8Array): Promise<number>;
 }
 
+/** Minimal kernel shape the transport drives (ReplKernel satisfies it). */
+interface Executable {
+  execute(
+    code: string,
+    options?: { signal?: AbortSignal },
+  ): { result: Promise<ReplEvalResult> };
+}
+
 export class StdioTransport {
   /**
    * Drive `kernel` from a stdin/stdout channel until the child sends
@@ -26,7 +34,7 @@ export class StdioTransport {
    * reaches EOF. Malformed lines are ignored, matching the legacy child.
    */
   static async attach(
-    kernel: ReplKernel,
+    kernel: Executable,
     stdin: StdioReader,
     stdout: StdioWriter,
   ): Promise<void> {
@@ -59,11 +67,13 @@ export class StdioTransport {
           typeof m.id === "string" &&
           typeof m.code === "string"
         ) {
-          const result = await kernel.eval(m.code, {
-            timeoutMs: typeof m.timeout_ms === "number"
-              ? m.timeout_ms
-              : undefined,
-          });
+          const timeoutMs = typeof m.timeout_ms === "number"
+            ? m.timeout_ms
+            : undefined;
+          const signal = timeoutMs && timeoutMs > 0
+            ? AbortSignal.timeout(timeoutMs)
+            : undefined;
+          const result = await kernel.execute(m.code, { signal }).result;
           await writeResult(stdout, encoder, m.id, result);
         }
       }

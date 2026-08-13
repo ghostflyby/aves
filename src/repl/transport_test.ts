@@ -4,13 +4,14 @@
 // Pure I/O: drives StdioTransport against in-memory reader/writer
 // streams and a stub kernel. No subprocess is involved. Verifies
 // the legacy wire protocol byte-for-byte: `eval` / `result` /
-// `close` / `closed`, optional `timeout_ms`, malformed-line
-// tolerance, and non-serializable result fallback.
+// `close` / `closed`, optional `timeout_ms` (mapped to an
+// AbortSignal), malformed-line tolerance, and non-serializable
+// result fallback.
 // ============================================================
 
 import { assertEquals } from "@std/assert";
 import { StdioTransport } from "./transport.ts";
-import type { ReplEvalResult, ReplKernel } from "./types.ts";
+import type { ReplEvalResult } from "./types.ts";
 
 class MemReader {
   private chunks: Uint8Array[];
@@ -37,18 +38,13 @@ class MemWriter {
   }
 }
 
-function stubKernel(handler: {
-  eval(code: string, options?: { timeoutMs?: number }): Promise<ReplEvalResult>;
-}): ReplKernel {
-  return {
-    eval: handler.eval,
-    interrupt() {},
-    snapshot() {
-      return { declaredNames: [], values: {} };
-    },
-    reset() {},
-    async dispose() {},
-  };
+function stubExecutable(handler: {
+  execute(
+    code: string,
+    options?: { signal?: AbortSignal },
+  ): { result: Promise<ReplEvalResult> };
+}) {
+  return { execute: handler.execute };
 }
 
 Deno.test("transport - eval result round-trip", async () => {
@@ -56,8 +52,8 @@ Deno.test("transport - eval result round-trip", async () => {
   const reader = new MemReader(
     '{"type":"eval","id":"1","code":"1+1"}\n{"type":"close"}\n',
   );
-  const kernel = stubKernel({
-    eval: () => Promise.resolve({ ok: true, data: 2 }),
+  const kernel = stubExecutable({
+    execute: () => ({ result: Promise.resolve({ ok: true, data: 2 }) }),
   });
   await StdioTransport.attach(kernel, reader, writer);
   const lines = writer.text.trim().split("\n").map((l) => JSON.parse(l));
@@ -69,20 +65,38 @@ Deno.test("transport - eval result round-trip", async () => {
   assertEquals(lines[1], { type: "closed" });
 });
 
-Deno.test("transport - forwards timeout_ms to kernel.eval", async () => {
+Deno.test("transport - maps timeout_ms to an AbortSignal.timeout", async () => {
   const writer = new MemWriter();
   const reader = new MemReader(
     '{"type":"eval","id":"1","code":"x","timeout_ms":123}\n{"type":"close"}\n',
   );
-  let seenTimeout: number | undefined;
-  const kernel = stubKernel({
-    eval: (_code, options) => {
-      seenTimeout = options?.timeoutMs;
-      return Promise.resolve({ ok: false, error: "REPL eval timed out" });
+  let seenSignal: AbortSignal | undefined;
+  const kernel = stubExecutable({
+    execute: (_code, options) => {
+      seenSignal = options?.signal;
+      return { result: Promise.resolve({ ok: false, error: "timed out" }) };
     },
   });
   await StdioTransport.attach(kernel, reader, writer);
-  assertEquals(seenTimeout, 123);
+  // A live AbortSignal.timeout has no reason until it fires.
+  assertEquals(seenSignal?.aborted, false);
+  assertEquals(seenSignal?.reason, undefined);
+});
+
+Deno.test("transport - no timeout_ms passes no signal", async () => {
+  const writer = new MemWriter();
+  const reader = new MemReader(
+    '{"type":"eval","id":"1","code":"x"}\n{"type":"close"}\n',
+  );
+  let seenSignal: AbortSignal | undefined = undefined;
+  const kernel = stubExecutable({
+    execute: (_code, options) => {
+      seenSignal = options?.signal;
+      return { result: Promise.resolve({ ok: true, data: 1 }) };
+    },
+  });
+  await StdioTransport.attach(kernel, reader, writer);
+  assertEquals(seenSignal, undefined);
 });
 
 Deno.test("transport - result failure carries error", async () => {
@@ -90,8 +104,8 @@ Deno.test("transport - result failure carries error", async () => {
   const reader = new MemReader(
     '{"type":"eval","id":"1","code":"boom"}\n{"type":"close"}\n',
   );
-  const kernel = stubKernel({
-    eval: () => Promise.resolve({ ok: false, error: "boom" }),
+  const kernel = stubExecutable({
+    execute: () => ({ result: Promise.resolve({ ok: false, error: "boom" }) }),
   });
   await StdioTransport.attach(kernel, reader, writer);
   const lines = writer.text.trim().split("\n").map((l) => JSON.parse(l));
@@ -106,8 +120,8 @@ Deno.test("transport - non-serializable result falls back to error", async () =>
   );
   const circular: Record<string, unknown> = {};
   circular.self = circular;
-  const kernel = stubKernel({
-    eval: () => Promise.resolve({ ok: true, data: circular }),
+  const kernel = stubExecutable({
+    execute: () => ({ result: Promise.resolve({ ok: true, data: circular }) }),
   });
   await StdioTransport.attach(kernel, reader, writer);
   const lines = writer.text.trim().split("\n").map((l) => JSON.parse(l));
@@ -121,8 +135,8 @@ Deno.test("transport - malformed lines are ignored", async () => {
     "garbage\nnot-json\n" +
       '{"type":"eval","id":"1","code":"1"}\n{"type":"close"}\n',
   );
-  const kernel = stubKernel({
-    eval: () => Promise.resolve({ ok: true, data: 1 }),
+  const kernel = stubExecutable({
+    execute: () => ({ result: Promise.resolve({ ok: true, data: 1 }) }),
   });
   await StdioTransport.attach(kernel, reader, writer);
   const lines = writer.text.trim().split("\n").map((l) => JSON.parse(l));
@@ -133,8 +147,8 @@ Deno.test("transport - malformed lines are ignored", async () => {
 Deno.test("transport - EOF without close ends the loop", async () => {
   const writer = new MemWriter();
   const reader = new MemReader('{"type":"eval","id":"1","code":"1"}\n');
-  const kernel = stubKernel({
-    eval: () => Promise.resolve({ ok: true, data: 1 }),
+  const kernel = stubExecutable({
+    execute: () => ({ result: Promise.resolve({ ok: true, data: 1 }) }),
   });
   await StdioTransport.attach(kernel, reader, writer);
   const lines = writer.text.trim().split("\n");

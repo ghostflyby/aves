@@ -15,21 +15,8 @@
 import { createReplKernel } from "./kernel.ts";
 import { StdioTransport } from "./transport.ts";
 
-const kernel = await createReplKernel({
-  runtime: {
-    emit() {
-      // Console output is intentionally not captured in stdio mode
-      // (consoleCapture "off"): the child's stdout carries only JSON
-      // protocol lines, matching the legacy boot behavior.
-    },
-    requestInput() {
-      return Promise.reject(
-        new Error("prompt()/confirm() are not supported in stdio mode"),
-      );
-    },
-  },
-  consoleCapture: "off",
-  installPrompt: false,
-});
+const kernel = await createReplKernel();
 
+// Console output is intentionally not captured in stdio mode: the child's
+// stdout carries only JSON protocol lines, matching the legacy boot behavior.
 await StdioTransport.attach(kernel, Deno.stdin, Deno.stdout);

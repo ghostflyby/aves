@@ -1,16 +1,18 @@
 // ============================================================
 // src/repl/types.ts — SDK public types
 //
-// Host-neutral contracts for the REPL kernel. The kernel owns NO
-// child process: hosts decide which process this code runs in,
-// who spawned it, and who supervises it (see the extraction
-// design doc §5.3).
+// The SDK is host-neutral and owns NO child process: hosts decide
+// which process this code runs in, who spawned it, and who
+// supervises it (design doc §5.3). The kernel produces per-cell
+// output streams and an emit port; every global install
+// (console.*, prompt/confirm, Deno.jupyter.*) is host-owned and
+// wired to those ports via the SDK utils (design doc §5.2).
 // ============================================================
 
 /** Plain MIME bundle shape used for display / execute_result payloads. */
 export type MimeBundle = Record<string, string | Uint8Array>;
 
-/** Structured output emitted during an evaluation. */
+/** Structured output produced during a single execution. */
 export type ReplOutputEvent =
   | { kind: "stdout"; text: string }
   | { kind: "stderr"; text: string }
@@ -25,36 +27,6 @@ export type ReplOutputEvent =
   | { kind: "execute_result"; data: MimeBundle; executionCount: number }
   | { kind: "error"; name: string; value: string; traceback: string[] };
 
-/**
- * Host-provided I/O the kernel calls during eval. The host binds this to its
- * own channel (notebook, log, control socket, JSON line, ...).
- */
-export interface ReplRuntime {
-  /** Route a structured output event to the host. */
-  emit(event: ReplOutputEvent): void | Promise<void>;
-  /** Host answers an input prompt (Jupyter input_request, terminal, ...). */
-  requestInput(prompt: string, password: boolean): Promise<string>;
-  /** Lifecycle hooks so the host can publish busy/idle. */
-  onEvalStart?(code: string): void | Promise<void>;
-  onEvalEnd?(result: ReplEvalResult): void | Promise<void>;
-}
-
-export interface ReplKernelOptions {
-  runtime: ReplRuntime;
-  /**
-   * How console output is handled:
-   *  - "protocol": console.log/warn/info/debug/error are captured into
-   *    stdout/stderr events (required when stdout is the protocol channel);
-   *  - "sideband": console.* untouched; host reads child stdout separately;
-   *  - "off": console.* untouched and ignored.
-   */
-  consoleCapture?: "protocol" | "sideband" | "off";
-  /** Bind globalThis.prompt/confirm to runtime.requestInput (default true). */
-  installPrompt?: boolean;
-  /** Bind globalThis.Deno.jupyter.* to runtime.emit (default false). */
-  jupyterShim?: boolean;
-}
-
 export interface ReplEvalResult {
   ok: boolean;
   /** Final-expression value (host may ignore in notebook mode). */
@@ -68,18 +40,42 @@ export interface ReplEvalResult {
   fatal?: boolean;
 }
 
-/** Persistent scope snapshot (declared names + value reference). */
+export interface ReplExecution {
+  /** Monotonic sequence number (Jupyter execution_count counterpart). */
+  readonly executionId: number;
+  /**
+   * Pull-based stream of this cell's structured output. The host consumes it
+   * with pipeTo / for await / tee; `emit()` routes additional events into the
+   * same stream while it is open.
+   */
+  readonly outputs: ReadableStream<ReplOutputEvent>;
+  /** Combined cancellation signal (host signal + interrupt + timeout). */
+  readonly signal: AbortSignal;
+  /** Settles when the cell's async IIFE settles (the stream closes after). */
+  readonly result: Promise<ReplEvalResult>;
+  /** Route an output event into this execution's stream. */
+  emit(event: ReplOutputEvent): void | Promise<void>;
+  /** Abort only this execution. */
+  abort(): void;
+}
+
 export interface ReplSnapshot {
-  declaredNames: string[];
-  values: Record<string, unknown>;
+  /** Names declared by executed cells. */
+  readonly names: string[];
+  /** Current values of declared names. */
+  readonly values: Record<string, unknown>;
 }
 
 export interface ReplKernel {
-  /** Evaluate one cell; resolves when the cell's async IIFE settles. */
-  eval(code: string, options?: { timeoutMs?: number }): Promise<ReplEvalResult>;
-  /** Cooperative interrupt of the in-flight eval (rejects the race). */
+  /**
+   * Queue and run one cell. Returns immediately; executions run serially
+   * (FIFO) because they share the persistent scope. Top-level await is
+   * supported. Cancellation: pass `{ signal }`, `AbortSignal.timeout(ms)`, or
+   * use `interrupt()`.
+   */
+  execute(code: string, options?: { signal?: AbortSignal }): ReplExecution;
+  /** Abort the in-flight execution (Jupyter interrupt_request counterpart). */
   interrupt(): void;
-  /** Persistent scope snapshot (declared names + values reference). */
   snapshot(): ReplSnapshot;
   /** Clear scope + declared names (restart without process respawn). */
   reset(): void;
