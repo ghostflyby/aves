@@ -82,6 +82,12 @@ async function createE2eContext(): Promise<E2eContext> {
   );
 
   const stderr: string[] = [];
+  // The spawned server child gets a temp HOME (below), which would give it an
+  // empty Deno cache and force a full dependency re-download on every e2e run —
+  // enough to blow the connect/ping timeouts and make this test flaky. Point it
+  // at the same cache this test process uses instead.
+  const serverDenoDir = Deno.env.get("DENO_DIR") ??
+    `${Deno.env.get("HOME") ?? ""}/.cache/deno`;
   const transport = new StdioClientTransport({
     command: Deno.execPath(),
     args: [
@@ -106,6 +112,7 @@ async function createE2eContext(): Promise<E2eContext> {
       AVES_CONFIG_DIR: configDir,
       AVES_STATE_DIR: stateDir,
       HOME: homeDir,
+      DENO_DIR: serverDenoDir,
       NO_COLOR: "1",
     },
     stderr: "pipe",

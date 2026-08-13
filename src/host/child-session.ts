@@ -16,10 +16,7 @@ import {
   startBroker,
 } from "../broker.ts";
 import { globalAbort, resolveModuleSpecifier } from "../runner.ts";
-import {
-  createRunBrokerPolicy,
-  type RunElicitContext,
-} from "../repl/policy.ts";
+import { createRunBrokerPolicy, type RunElicitContext } from "./policy.ts";
 import type { Permissions } from "../types.ts";
 import type { SandboxState } from "../sandbox-state.ts";
 

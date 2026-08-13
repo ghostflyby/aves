@@ -10,7 +10,7 @@ import {
   isDefaultAllowed,
   pathMatches,
   type RunElicitContext,
-} from "./repl/policy.ts";
+} from "./host/policy.ts";
 
 // ============================================================
 // Global abort signal — aborted on server shutdown.
@@ -28,7 +28,7 @@ export function resolveModuleSpecifier(
 }
 
 export { createRunBrokerPolicy, isDefaultAllowed, pathMatches };
-export type { RunElicitContext } from "./repl/policy.ts";
+export type { RunElicitContext } from "./host/policy.ts";
 
 const BOOT_SPECIFIER = resolveModuleSpecifier("./boot.ts");
 

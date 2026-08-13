@@ -123,7 +123,6 @@ src/repl/                         <- the SDK (host-neutral; owns NO child proces
                                     StdioTransport over stdin/stdout (reference
                                     assembly; external hosts write their own entry
                                     bound to their own transport)
-    policy.ts                       *example* default policy (moved from runner.ts)
     jupyter/                        optional Jupyter-compat shim (Deno.jupyter.* ->
                                     runtime events) + MIME formatting helpers
 
@@ -132,13 +131,15 @@ src/host/                         <- host-side assembly (Aves as one host)
                                     with broker + env + cwd, drives StdioTransport,
                                     owns timeout/SIGKILL/restart supervision
     manager.ts                      ReplManager (registry; unchanged semantics)
+    policy.ts                       Aves' default BrokerPolicy decision chain
+                                    (moved from runner.ts; host-owned, see §5.5)
 
 src/broker.ts                     stays (protocol + injectable policy; the broker
                                   server is started by the process that owns the
                                   child — the host, never the SDK)
 
 src/runner.ts                     keeps only module/skill run path; imports
-                                  broker + repl/policy as a consumer
+                                  broker + host/policy as a consumer
 src/mcp/*, run-store, skill, config, paths   unchanged (Aves-owned)
 
 main.ts                           unchanged
@@ -147,7 +148,8 @@ main.ts                           unchanged
 The SDK must import only: `node:` built-ins, `acorn`, `astring`, and
 `esbuild-wasm`. It must **not** import `src/runner.ts`, `src/policy.ts`,
 `src/run-store.ts`, `src/config.ts`, `src/paths.ts`, `src/skill.ts`,
-`sandbox-state.ts`, or anything under `src/mcp/` or `src/host/`.
+`sandbox-state.ts`, `src/host/policy.ts`, or anything under `src/mcp/` or
+`src/host/`.
 
 ### 5.2 Core interfaces
 
@@ -314,22 +316,27 @@ behavior.
 
 `src/broker.ts` already exposes the generic seam — `startBroker(policy)` with
 `BrokerPolicy.decide()` returning `"allow" | { deny } | "elicit"`. The SDK keeps
-this as the contract and ships:
+this as the **contract only**: a `BrokerPolicy` is meaningless without a Deno
+host that runs `startBroker` over the `DENO_PERMISSION_BROKER_PATH` wire
+protocol, so the decision chain is host-owned, not SDK-owned.
 
-- `startBroker(policy)` + `DENO_PERMISSION_BROKER_PATH` wiring (unchanged), and
-- `src/repl/policy.ts`: Aves' current default decision chain
-  (`createRunBrokerPolicy`) moved from `runner.ts`, documented as the **example
-  policy** (safe sys/env, temp dirs, import allowlist, extraDirs,
-  read-only-no-ceiling, elicit).
-
-External hosts implement their own `BrokerPolicy`. For a notebook host the
-natural chain is: workspace/io dirs → allow; explicit configuration policy →
-allow/deny; everything else → deny (or a notebook-user approval routed through
-`ReplRuntime.requestInput`). The `"elicit"` state already supports any
-asynchronous decision, so approval can flow over any channel.
+- The broker protocol + server (`startBroker`) stay in `src/broker.ts`
+  (transport, not policy), run by whichever process owns the child — the host,
+  never the SDK.
+- `src/host/policy.ts`: Aves' default decision chain (`createRunBrokerPolicy`,
+  `isDefaultAllowed`, `pathMatches`) moved from `runner.ts` into the host layer.
+  It is Aves' own policy, not an SDK example: safe sys/env, temp dirs, import
+  allowlist, extraDirs, read-only-no-ceiling, elicit. Re-exported from
+  `@ghostflyby/aves/host` along with the other host assemblies.
+- The SDK exports no policy at all. External hosts implement their own
+  `BrokerPolicy` and pass it to their own `startBroker` call. For a notebook
+  host the natural chain is: workspace/io dirs → allow; explicit configuration
+  policy → allow/deny; everything else → deny (or a notebook-user approval
+  routed through `ReplRuntime.requestInput`). The `"elicit"` state already
+  supports any asynchronous decision, so approval can flow over any channel.
 
 Aves-specific inputs to the policy (`codexCeiling`, `mod.permission.ts`, skill
-dirs) stay inside Aves' example policy and its consumers (`runner.ts`,
+dirs) stay inside Aves' host policy and its consumers (`runner.ts`,
 `permission-loader.ts`), never in the SDK.
 
 ### 5.6 Persistence
@@ -427,11 +434,11 @@ result is entirely a host decision.
   `policy.ts` (example default `BrokerPolicy` + `MidDecideHook`), `mod.ts` (SDK
   surface) added. The SDK imports only `node:` built-ins, `acorn`, `astring`,
   and `esbuild-wasm`.
-- `src/host/child-session.ts` + `manager.ts` own Aves' spawn/supervision
-  (broker, env/cwd, timeouts, SIGKILL escalation, `globalAbort` linkage);
-  `mcp/server.ts`, `mcp/resources.ts`, `main.ts`, `transform_test.ts` updated;
+- `src/host/child-session.ts` + `manager.ts` + `policy.ts` own Aves'
+  spawn/supervision and its default BrokerPolicy; `mcp/server.ts`,
+  `mcp/resources.ts`, `main.ts`, `transform_test.ts` updated;
   `src/repl/session.ts`/`manager.ts`/`repl-boot.ts` deleted.
-- `src/runner.ts` policy logic moved to `src/repl/policy.ts`; runner re-exports
+- `src/runner.ts` policy logic moved to `src/host/policy.ts`; runner re-exports
   and passes the skill permission module as the policy's `MidDecideHook`.
 - `src/repl/mod.ts` and `src/mod.ts` export the SDK + host assemblies.
 - New unit tests: `kernel_test.ts` (13 cases, fake `ReplRuntime`: persistence,
@@ -448,10 +455,9 @@ result is entirely a host decision.
   the broker that the default policy does **not** auto-allow. The SDK therefore
   imports the native backend **dynamically** (`import("esbuild")`) so the
   default wasm path never loads it, and the `ESBUILD_BINARY_PATH` /
-  `ESBUILD_WORKER_THREADS` env auto-allows are kept in the example policy
-  (parity with HEAD, protects the opt-in native backend). Verified: the wasm
-  path hits exactly one broker decision (pre-approved wasm read), zero
-  elicitation.
+  `ESBUILD_WORKER_THREADS` env auto-allows are kept in the host policy (parity
+  with HEAD, protects the opt-in native backend). Verified: the wasm path hits
+  exactly one broker decision (pre-approved wasm read), zero elicitation.
 - **esbuild-wasm `initialize()` is process-singleton**: calling it twice in one
   process throws ("Cannot call initialize more than once"). The resolved backend
   is memoised at module scope in `eval-engine.ts`, shared by all

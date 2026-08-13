@@ -1,11 +1,13 @@
 // ============================================================
-// src/repl/policy.ts — example default BrokerPolicy
+// src/host/policy.ts — Aves' default BrokerPolicy
 //
-// Aves' default permission decision chain, moved out of runner.ts
-// and shipped with the SDK as the *example* policy (design doc
-// §5.5). External hosts implement their own BrokerPolicy over the
-// same Deno permission-broker wire protocol (workspace defaults,
-// configuration policy, notebook-user approval, silent deny, ...).
+// Aves' default permission decision chain (moved out of runner.ts).
+// It lives in the host layer, not the SDK: a BrokerPolicy only
+// takes effect inside a Deno host that runs `startBroker` over the
+// DENO_PERMISSION_BROKER_PATH wire protocol. External hosts (e.g. a
+// Jupyter kernel) implement their own decision chain — workspace
+// defaults, configuration policy, notebook-user approval, silent
+// deny — and pass it to their own `startBroker` call.
 //
 // Decision chain (no hard denies — everything beyond defaults is
 // elicited so the user has final say):
