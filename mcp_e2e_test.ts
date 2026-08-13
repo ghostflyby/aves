@@ -91,6 +91,10 @@ async function createE2eContext(): Promise<E2eContext> {
       "--allow-env",
       "--allow-run",
       "--allow-sys",
+      // The server child starts the permission broker, whose unix-socket
+      // listener requires net permission (Deno classifies Deno.listen with
+      // transport:"unix" under --allow-net).
+      "--allow-net",
       "--unstable-worker-options",
       "--unstable-raw-imports",
       "main.ts",
