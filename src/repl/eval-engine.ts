@@ -10,8 +10,6 @@
 import esbuildWasmCjs from "esbuild-wasm/lib/browser.js";
 import { transform } from "./transform.ts";
 
-export type TransformBackend = "esbuild-wasm" | "esbuild";
-
 type TransformFn = (
   code: string,
   options: { loader: string; format: string },
@@ -36,11 +34,11 @@ const esbuildWasm = esbuildWasmCjs as unknown as {
  * backend is memoised at module scope — all kernels/engines in a process share
  * the single WASM service.
  */
-let wasmTransformPromise: Promise<TransformFn> | null = null;
+let transformPromise: Promise<TransformFn> | null = null;
 
-function makeWasmTransform(): Promise<TransformFn> {
-  if (!wasmTransformPromise) {
-    wasmTransformPromise = (async () => {
+function getTransform(): Promise<TransformFn> {
+  if (!transformPromise) {
+    transformPromise = (async () => {
       const entryUrl = import.meta.resolve("esbuild-wasm/lib/browser.js");
       const wasmBytes = await Deno.readFile(
         new URL("../esbuild.wasm", entryUrl),
@@ -49,28 +47,14 @@ function makeWasmTransform(): Promise<TransformFn> {
       await esbuildWasm.initialize({ wasmModule, worker: false });
       return esbuildWasm.transform;
     })();
-    wasmTransformPromise.catch(() => {
-      wasmTransformPromise = null;
+    transformPromise.catch(() => {
+      transformPromise = null;
     });
   }
-  return wasmTransformPromise;
-}
-
-function makeNativeTransform(): Promise<TransformFn> {
-  // Dynamic import: the native esbuild package's node entry reads
-  // process.env.ESBUILD_BINARY_PATH at module load (a permission-checked
-  // access under the broker). Only pay that cost when the native backend is
-  // actually selected; the default wasm path never loads it.
-  return import("esbuild").then((nativeEsbuild) => (code, options) =>
-    nativeEsbuild.transform(
-      code,
-      options as Parameters<typeof nativeEsbuild.transform>[1],
-    )
-  );
+  return transformPromise;
 }
 
 export interface EvalEngineOptions {
-  backend?: TransformBackend;
   /** "protocol" mode wraps console.* so output lands in emit events. */
   consoleCapture?: "protocol" | "sideband" | "off";
   /** Bind globalThis.prompt/confirm to requestInput. */
@@ -84,7 +68,6 @@ export class EvalEngine {
   readonly scope: Record<string, unknown> = {};
   readonly declaredNames: Set<string> = new Set();
 
-  private backend: TransformBackend;
   private transformPromise: Promise<TransformFn> | null = null;
   private emitFn: EvalEngineOptions["emit"];
   private requestInput: EvalEngineOptions["requestInput"];
@@ -96,7 +79,6 @@ export class EvalEngine {
   private disposed = false;
 
   constructor(options: EvalEngineOptions) {
-    this.backend = options.backend ?? "esbuild-wasm";
     this.emitFn = options.emit;
     this.requestInput = options.requestInput;
     if (options.consoleCapture === "protocol") this.installConsoleCapture();
@@ -106,9 +88,7 @@ export class EvalEngine {
   /** Lazily resolve the process-global transform backend once per engine. */
   private getTransform(): Promise<TransformFn> {
     if (!this.transformPromise) {
-      this.transformPromise = this.backend === "esbuild"
-        ? makeNativeTransform()
-        : makeWasmTransform();
+      this.transformPromise = getTransform();
     }
     return this.transformPromise;
   }

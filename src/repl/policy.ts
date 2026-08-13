@@ -64,10 +64,6 @@ const DEFAULT_ALLOWED_ENV = new Set([
   "LC_ALL",
   "TERM",
   "AVES_IO_DIR",
-  // The native esbuild package's node entry reads these at module load;
-  // auto-allow so an opt-in native transform backend never elicits at startup.
-  "ESBUILD_BINARY_PATH",
-  "ESBUILD_WORKER_THREADS",
   "NODE_V8_COVERAGE",
 ]);
 

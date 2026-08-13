@@ -358,6 +358,13 @@ changes for existing behavior (the REPL path already does not persist).
   (2 elicitable) to 1 silently-allowed read; the child's
   `--allow-run`/`--allow-ffi` grants and the `ESBUILD_BINARY_PATH` /
   `ESBUILD_WORKER_THREADS` env auto-allows are deleted.
+- **Native esbuild is removed entirely** (`npm:esbuild` and its platform
+  binaries are gone from `deno.json`/`deno.lock`): the `transformBackend` option
+  was dropped and the SDK always uses the in-process wasm backend. The SDK's
+  dependency graph is `node:` built-ins + `acorn` + `astring` + `esbuild-wasm`
+  only, and no code path in the SDK can trigger a run/ffi permission request.
+  Restoring the native backend (e.g. for high-throughput hosts) is a
+  `deno add npm:esbuild` plus a small branch in `eval-engine.ts`.
 - Offline: no `wasmURL` redirect is involved, so no browser-only constraint —
   the package must be present (Deno's npm cache, `deno install`, or a checked-in
   package copy). Whole-package presence is required because the entry and the
@@ -399,8 +406,7 @@ result is entirely a host decision.
 
 ### Phase 1 — esbuild-wasm swap (no API change)
 
-- `deno.json`: add `esbuild-wasm` (pinned, alias to `lib/browser.js`), keep
-  `esbuild` for dev comparison.
+- `deno.json`: add `esbuild-wasm` (pinned, alias to `lib/browser.js`).
 - `src/repl/repl-boot.ts`: `initialize({ wasmModule, worker: false })` from the
   browser entry, lazily at first transform; wasm bytes read from the package
   dir.
@@ -408,8 +414,8 @@ result is entirely a host decision.
   esbuild-wasm package-dir `extraDirs` pre-approval.
 - `src/repl/transform_test.ts`: boot path uses the in-process backend; drop the
   `--allow-run`/`--allow-ffi` grants; grant the wasm package dir read.
-- Remove the `ESBUILD_BINARY_PATH`/`ESBUILD_WORKER_THREADS` env auto-allows.
-- Full test pass; drop `npm:esbuild` once `transformBackend` defaults to wasm.
+- Full test pass; `npm:esbuild` dropped — `transformBackend` option removed, the
+  SDK depends only on esbuild-wasm.
 - **DONE (verified on deno 2.9.5, macOS arm64)**: all 34 REPL tests green;
   broker trace shows a single pre-approved read (was 5 requests, 2 elicitable).
 

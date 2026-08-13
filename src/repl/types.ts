@@ -41,8 +41,6 @@ export interface ReplRuntime {
 
 export interface ReplKernelOptions {
   runtime: ReplRuntime;
-  /** Default: "esbuild-wasm". "esbuild" kept for local dev/bench. */
-  transformBackend?: "esbuild-wasm" | "esbuild";
   /**
    * How console output is handled:
    *  - "protocol": console.log/warn/info/debug/error are captured into

@@ -16,7 +16,6 @@ export function createReplKernel(
 ): Promise<ReplKernel> {
   const runtime = options.runtime;
   const engine = new EvalEngine({
-    backend: options.transformBackend,
     consoleCapture: options.consoleCapture,
     installPrompt: options.installPrompt,
     emit: (event) => {
