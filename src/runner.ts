@@ -1,22 +1,23 @@
 import type { ServerPolicy } from "./policy.ts";
 import { resolvePermissions } from "./policy.ts";
 import type { Permissions, RunRecord, RunRequest } from "./types.ts";
-import type {
-  BrokerPolicy,
-  ElicitResolver,
-  PermissionKind,
-  PermissionRequest,
-} from "./broker.ts";
+import type { ElicitResolver, PermissionRequest } from "./broker.ts";
 import { startBroker } from "./broker.ts";
 import type { SandboxState } from "./sandbox-state.ts";
 import { loadPermissionModule } from "./permission-loader.ts";
-/**
- * Global abort signal — aborted on server shutdown.
- * Each script run creates a child controller linked to this one,
- * so all spawned Deno subprocesses are killed when Aves exits.
- */
+import {
+  createRunBrokerPolicy,
+  isDefaultAllowed,
+  pathMatches,
+  type RunElicitContext,
+} from "./repl/policy.ts";
 
-import * as path from "node:path";
+// ============================================================
+// Global abort signal — aborted on server shutdown.
+// Each script run creates a child controller linked to this one,
+// so all spawned Deno subprocesses are killed when Aves exits.
+// ============================================================
+
 export const globalAbort = new AbortController();
 
 export function resolveModuleSpecifier(
@@ -25,6 +26,9 @@ export function resolveModuleSpecifier(
 ): string {
   return new URL(relativePath, baseUrl).href;
 }
+
+export { createRunBrokerPolicy, isDefaultAllowed, pathMatches };
+export type { RunElicitContext } from "./repl/policy.ts";
 
 const BOOT_SPECIFIER = resolveModuleSpecifier("./boot.ts");
 
@@ -42,16 +46,6 @@ const DEFAULT_IMPORT_DOMAINS = [
   "cdn.jsdelivr.net:443",
   "raw.githubusercontent.com:443",
   "gist.githubusercontent.com:443",
-];
-
-const BROKER_NET_ALLOW = [
-  "deno.land",
-  "jsr.io",
-  "esm.sh",
-  "raw.esm.sh",
-  "cdn.jsdelivr.net",
-  "raw.githubusercontent.com",
-  "gist.githubusercontent.com",
 ];
 
 // ============================================================
@@ -84,182 +78,6 @@ function spawnDenoWithBroker(
     },
   });
   return cmd.spawn();
-}
-
-// ============================================================
-// Default-allowed permissions (always allow, no ceiling/trust)
-// ============================================================
-
-const DEFAULT_ALLOWED_SYS = new Set([
-  "hostname",
-  "osRelease",
-  "osUptime",
-  "loadavg",
-  "systemMemoryInfo",
-  "gid",
-  "uid",
-  "networkInterfaces",
-]);
-
-const DEFAULT_ALLOWED_ENV = new Set([
-  "HOME",
-  "USER",
-  "PATH",
-  "TMPDIR",
-  "TEMP",
-  "TMP",
-  "SHELL",
-  "LANG",
-  "LC_ALL",
-  "TERM",
-  "AVES_IO_DIR",
-  "ESBUILD_BINARY_PATH",
-  "ESBUILD_WORKER_THREADS",
-  "NODE_V8_COVERAGE",
-]);
-
-function resolveTempDirs(): string[] {
-  const dirs: string[] = ["/tmp"];
-  const tmpdir = Deno.env.get("TMPDIR");
-  if (tmpdir && tmpdir !== "/tmp") {
-    dirs.push(tmpdir.replace(/\/+\$/, ""));
-  }
-  return dirs;
-}
-
-export function isDefaultAllowed(
-  req: { permission: PermissionKind; value: string },
-): boolean {
-  switch (req.permission) {
-    case "sys":
-      return DEFAULT_ALLOWED_SYS.has(req.value);
-    case "env":
-      return req.value.startsWith("NODE_") ||
-        DEFAULT_ALLOWED_ENV.has(req.value);
-    case "read":
-    case "write":
-      return resolveTempDirs().some((d) => pathMatches(d + "/", req.value));
-    case "net": {
-      const reqHost = req.value.split(":")[0];
-      return BROKER_NET_ALLOW.some((d) => reqHost === d);
-    }
-    case "import": {
-      const reqHost = req.value.split(":")[0];
-      return DEFAULT_IMPORT_DOMAINS.some((d) => {
-        const allowedHost = d.split(":")[0];
-        return reqHost === allowedHost;
-      });
-    }
-    default:
-      return false;
-  }
-}
-
-// ============================================================
-// Path matching (handles macOS /var -> /private/var symlink)
-// ============================================================
-
-export function pathMatches(allowed: string, requested: string): boolean {
-  if (requested.startsWith(allowed)) return true;
-  const normReq = requested.replace(/^\/private/, "");
-  const normAllowed = allowed.replace(/^\/private/, "");
-  return normReq.startsWith(normAllowed) || allowed.startsWith(normReq);
-}
-
-// ============================================================
-// createRunBrokerPolicy
-//
-// Decision chain (no hard denies — everything beyond defaults
-// is elicited so the user has final say):
-//
-//   default allowed (tmp, safe sys/env, import domains) → allow
-//   import not in built-in list → hard deny (no permModule override)
-//   permission module (skill mod.permission.ts) → allow/deny/null
-//   extra dirs (run dir, module dir, cwd) → allow
-//   read-only without ceiling → allow
-//   everything else → elicit
-// ============================================================
-
-/** Context passed through to the elicitation handler. */
-export interface RunElicitContext {
-  codeHash: string | null;
-  codexCeiling: SandboxState | null;
-  extraDirs: string[];
-  /** Run requests whose normalized value exactly matches an entry in this list are auto-allowed without elicitation. */
-  preApprovedRunPaths?: string[];
-}
-
-export function createRunBrokerPolicy(
-  ctx: RunElicitContext,
-  skillDir?: string,
-): BrokerPolicy {
-  const permModule = skillDir ? loadPermissionModule(skillDir) : null;
-
-  return {
-    async decide(req) {
-      // Resolve relative paths against the run directory (read/write only)
-      const isPathPerm = req.permission === "read" ||
-        req.permission === "write";
-      const resolvedValue =
-        isPathPerm && !req.value.startsWith("/") && ctx.extraDirs[0]
-          ? `${ctx.extraDirs[0]}/${req.value.replace(/^\.\//, "")}`
-          : req.value;
-      const resolvedReq = { ...req, value: resolvedValue };
-
-      // 1. Default allowed (safe sys, env, tmp, import domains)
-      if (isDefaultAllowed(resolvedReq)) return "allow";
-
-      // 1b. Pre-approved run paths (e.g. esbuild native binary) — auto-allow without elicitation.
-      // Normalise so symlinks or trailing slashes don't defeat the exact match.
-      if (
-        resolvedReq.permission === "run" &&
-        ctx.preApprovedRunPaths?.some((p) =>
-          path.normalize(p) === path.normalize(resolvedValue)
-        )
-      ) {
-        return "allow";
-      }
-
-      // 1a. Import not in built-in list → hard deny (no permModule override)
-      if (resolvedReq.permission === "import") {
-        return {
-          deny: "import from this domain is not in the built-in allowlist",
-        };
-      }
-
-      // 2. Permission module (skill mod.permission.ts) — user's rules override everything below
-      if (permModule) {
-        const permResult = await permModule.decide(
-          resolvedReq.permission,
-          resolvedValue,
-        );
-        if (permResult === "deny") {
-          return { deny: "denied by skill permission module" };
-        }
-        if (permResult === "allow") return "allow";
-        // null/undefined → fall through
-      }
-
-      // 3. Extra dirs (run dir, module dir, cwd) — auto-allow if permModule didn't decide
-      if (
-        (resolvedReq.permission === "read" ||
-          resolvedReq.permission === "write") &&
-        ctx.extraDirs.some((d) => pathMatches(d + "/", resolvedValue))
-      ) return "allow";
-
-      // 5. Read-only with no ceiling → allow silently
-      if (!ctx.codexCeiling && resolvedReq.permission === "read") {
-        return "allow";
-      }
-
-      // 6. Everything else → elicit (user has final say)
-      return "elicit";
-    },
-
-    onElicitResolved(_id, _allowed) {
-      // No-op: elicitation handled by the server via onElicit
-    },
-  };
 }
 
 // ============================================================
@@ -310,8 +128,20 @@ async function runModuleInSandbox(
     extraDirs,
   };
 
-  // Start the permission broker
-  const policy = createRunBrokerPolicy(ctx, skillDir);
+  // Start the permission broker. The skill permission module
+  // (mod.permission.ts), if any, participates as the mid-decision hook.
+  const skillModule = skillDir ? loadPermissionModule(skillDir) : null;
+  const policy = createRunBrokerPolicy(
+    ctx,
+    skillModule
+      ? async (req) => {
+        const r = await skillModule.decide(req.permission, req.value);
+        if (r === "deny") return { deny: "denied by skill permission module" };
+        if (r === "allow") return "allow";
+        return null;
+      }
+      : undefined,
+  );
   if (onElicit) {
     policy.onElicit = (_id, req, resolve) => {
       onElicit(req, resolve).catch(() => resolve(false));

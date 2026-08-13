@@ -1,5 +1,5 @@
 // ============================================================
-// src/repl/manager.ts — ReplManager singleton
+// src/host/manager.ts — Aves host-side ReplManager registry
 // ============================================================
 
 import type { Permissions } from "../types.ts";
@@ -9,7 +9,7 @@ import {
   type ReplSession,
   type ReplSessionInfo,
   spawnReplSession,
-} from "./session.ts";
+} from "./child-session.ts";
 
 export interface ReplCreateOptions {
   description?: string;

@@ -1,7 +1,7 @@
 // Aves MCP resources — static metadata, dynamic examples, and parameterized lookups.
 
 import { ProtocolError, ProtocolErrorCode } from "@modelcontextprotocol/server";
-import { replManager } from "../repl/manager.ts";
+import { replManager } from "../host/manager.ts";
 import { RUNS_TABLE_DDL } from "../db-schema.ts";
 import { loadRun } from "../run-store.ts";
 import { listSkills } from "../skill.ts";

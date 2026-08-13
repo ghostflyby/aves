@@ -1,6 +1,6 @@
 import { assertEquals, assertStringIncludes } from "@std/assert";
 import { rewriteReferences, transform } from "./transform.ts";
-import { replManager } from "./manager.ts";
+import { replManager } from "../host/manager.ts";
 
 // ============================================================
 // Part 1: transform() tests (pure functions)
@@ -32,6 +32,20 @@ Deno.test("transform - function", () => {
   const r = transform("function foo() {}", names);
   assertStringIncludes(r, "scope.foo = function foo()");
   assertEquals(names.has("foo"), true);
+});
+
+Deno.test("transform - class", () => {
+  const names = new Set<string>();
+  const r = transform("class Foo { static v = 1 }", names);
+  assertStringIncludes(r, "scope.Foo = class Foo");
+  assertEquals(names.has("Foo"), true);
+});
+
+Deno.test("transform - class with extends", () => {
+  const names = new Set<string>();
+  const r = transform("class Foo extends Base {}", names);
+  assertStringIncludes(r, "scope.Foo = class Foo extends Base");
+  assertEquals(names.has("Foo"), true);
 });
 
 Deno.test("transform - import default", () => {
@@ -141,6 +155,14 @@ Deno.test("rewriteRef - closure reference", () => {
   assertStringIncludes(r, "return scope.x;");
 });
 
+Deno.test("rewriteRef - class reference", () => {
+  const names = new Set<string>();
+  names.add("Foo");
+  const code = "scope.Foo = class Foo {};\nFoo.v;";
+  const r = rewriteReferences(code, names);
+  assertStringIncludes(r, "scope.Foo.v;");
+});
+
 Deno.test("rewriteRef - shadowed local", () => {
   const names = new Set<string>();
   names.add("x");
@@ -183,8 +205,13 @@ Deno.test("rewriteRef - computed member property is rewritten", () => {
 // Tests focus on child-process protocol and state behavior.
 // ============================================================
 
-const BOOT_PATH = new URL("./repl-boot.ts", import.meta.url).pathname;
+const BOOT_PATH = new URL("./boot.ts", import.meta.url).pathname;
 const PROJECT_DIR = new URL("..", import.meta.url).pathname;
+// esbuild-wasm reads its esbuild.wasm payload from the package directory at
+// first transform; grant the child that one read explicitly.
+const WASM_DIR =
+  new URL("..", import.meta.resolve("esbuild-wasm/lib/browser.js"))
+    .pathname;
 
 async function bootEval(
   inputs: string[],
@@ -193,10 +220,8 @@ async function bootEval(
     args: [
       "run",
       "--no-prompt",
-      "--allow-run",
-      "--allow-ffi",
       "--allow-env",
-      "--allow-read=.,/Users/ghostflyby/repos/learn/aves",
+      "--allow-read=.," + PROJECT_DIR + "," + WASM_DIR,
       "--allow-import=deno.land:443,jsr.io:443,esm.sh:443,raw.esm.sh:443,cdn.jsdelivr.net:443,raw.githubusercontent.com:443,gist.githubusercontent.com:443,registry.npmjs.org:443",
       BOOT_PATH,
     ],
@@ -242,6 +267,17 @@ Deno.test("repl-boot - state across evals", async () => {
   ]);
   assertEquals(r[0].ok, true);
   assertEquals(r[1].ok, true);
+});
+
+Deno.test("repl-boot - class persists across evals", async () => {
+  const r = await bootEval([
+    '{"type":"eval","id":"1","code":"class Foo { static v = 42 }"}',
+    '{"type":"eval","id":"2","code":"Foo.v"}',
+    '{"type":"close"}',
+  ]);
+  assertEquals(r[0].ok, true);
+  assertEquals(r[1].ok, true);
+  assertEquals(r[1].data, 42);
 });
 
 Deno.test("repl-boot - top-level await", async () => {

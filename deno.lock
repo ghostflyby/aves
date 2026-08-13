@@ -313,6 +313,7 @@
       "npm:@modelcontextprotocol/server@^2.0.0-alpha.2",
       "npm:acorn@8",
       "npm:astring@1",
+      "npm:esbuild-wasm@0.25.12",
       "npm:esbuild@0.25",
       "npm:zod@^4.4.3"
     ]

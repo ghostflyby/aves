@@ -1,7 +1,11 @@
 {
   "name": "@ghostflyby/aves",
   "version": "0.4.1",
-  "exports": "./main.ts",
+  "exports": {
+    ".": "./main.ts",
+    "./repl": "./src/repl/mod.ts",
+    "./host": "./src/host/mod.ts"
+  },
   "license": "MIT",
   "tasks": {
     "dev": "deno run --watch main.ts",
@@ -13,6 +17,7 @@
     "astring": "npm:astring@^1",
     "@modelcontextprotocol/client": "npm:@modelcontextprotocol/client@^2.0.0-alpha.2",
     "esbuild": "npm:esbuild@^0.25",
+    "esbuild-wasm": "npm:esbuild-wasm@0.25.12",
     "@modelcontextprotocol/server": "npm:@modelcontextprotocol/server@^2.0.0-alpha.2",
     "@std/assert": "jsr:@std/assert@^1.0.19",
     "@std/toml": "jsr:@std/toml@^1.0.11",

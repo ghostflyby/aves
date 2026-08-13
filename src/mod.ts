@@ -6,3 +6,6 @@ export * from "./skill.ts";
 export * from "./policy.ts";
 export * from "./paths.ts";
 export * from "./server-registry.ts";
+export * from "./repl/mod.ts";
+export { ReplManager, replManager } from "./host/manager.ts";
+export { ReplSession, spawnReplSession } from "./host/child-session.ts";

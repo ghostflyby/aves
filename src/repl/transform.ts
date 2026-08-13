@@ -91,6 +91,8 @@ function transformStatement(
       return transformVariableDecl(stmt, declaredNames);
     case "FunctionDeclaration":
       return transformFuncDecl(stmt, declaredNames);
+    case "ClassDeclaration":
+      return transformClassDecl(stmt, declaredNames);
     default:
       return stmt;
   }
@@ -271,6 +273,29 @@ function transformFuncDecl(
   return es(assign(scopeMem(name), funcExpr as unknown as EstreeNode));
 }
 
+function transformClassDecl(
+  node: EstreeNode,
+  declaredNames: Set<string>,
+): EstreeNode {
+  const cd = node as unknown as {
+    id: { name: string } | null;
+    superClass: EstreeNode | null;
+    body: EstreeNode;
+  };
+  if (!cd.id) return node;
+  const name = cd.id.name;
+  declaredNames.add(name);
+
+  const classExpr = {
+    type: "ClassExpression",
+    id: { type: "Identifier", name },
+    superClass: cd.superClass,
+    body: cd.body,
+  };
+
+  return es(assign(scopeMem(name), classExpr as unknown as EstreeNode));
+}
+
 // ============================================================
 // Phase 2: Reference rewrite — uses local-scope stack to
 // handle closures correctly
@@ -357,6 +382,7 @@ function walkRef(
     "FunctionDeclaration",
     "FunctionExpression",
     "ArrowFunctionExpression",
+    "ClassExpression",
   ];
 
   if (scoped.includes(node.type)) {
@@ -387,6 +413,25 @@ function walkRef(
       addParamsToScope(a.params, localScopes);
       for (const p of a.params) walkRef(p, names, localScopes, reps, true);
       walkFnBody(a.body, names, localScopes, reps);
+    } else if (node.type === "ClassExpression") {
+      const ce = node as unknown as {
+        id: EstreeNode | null;
+        superClass: EstreeNode | null;
+        body: EstreeNode;
+      };
+      // The class expression's own name is a binding inside the class body
+      // (and its own declaration), not a reference to the outer scope.
+      if (ce.id) {
+        const ts = localScopes[localScopes.length - 1];
+        if (ce.id.type === "Identifier") {
+          ts.add((ce.id as unknown as { name: string }).name);
+        }
+        walkRef(ce.id, names, localScopes, reps, true);
+      }
+      if (ce.superClass) {
+        walkRef(ce.superClass, names, localScopes, reps, false);
+      }
+      walkRef(ce.body, names, localScopes, reps, false);
     }
     localScopes.pop();
     return;

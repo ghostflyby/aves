@@ -1,5 +1,11 @@
 // ============================================================
-// src/repl/session.ts — ReplSession class
+// src/host/child-session.ts — Aves host-side REPL session
+//
+// Aves' host assembly (design doc §5.3): spawns `deno run boot.ts`
+// with broker + env + cwd, drives the stdio transport, and owns
+// the supervision state machine (timeouts, SIGKILL escalation,
+// broker lifecycle, restart signalling). The SDK kernel never
+// spawns or kills anything.
 // ============================================================
 
 import { fileURLToPath } from "node:url";
@@ -9,12 +15,11 @@ import {
   type PermissionRequest,
   startBroker,
 } from "../broker.ts";
+import { globalAbort, resolveModuleSpecifier } from "../runner.ts";
 import {
   createRunBrokerPolicy,
-  globalAbort,
-  resolveModuleSpecifier,
   type RunElicitContext,
-} from "../runner.ts";
+} from "../repl/policy.ts";
 import type { Permissions } from "../types.ts";
 import type { SandboxState } from "../sandbox-state.ts";
 
@@ -294,12 +299,12 @@ function delay(ms: number): Promise<void> {
 }
 
 // ============================================================
-// Spawn — uses createRunBrokerPolicy from runner.ts
+// Spawn — host assembly with broker + supervision
 // ============================================================
 
-// Resolve repl-boot.ts relative to this source, falling back to PWD/src.
+// Resolve boot.ts relative to this source.
 const BOOT_SPECIFIER = resolveModuleSpecifier(
-  "./repl-boot.ts",
+  "../repl/boot.ts",
   import.meta.url,
 );
 const DEFAULT_IMPORT_DOMAINS = [
@@ -337,40 +342,23 @@ export async function spawnReplSession(
   const extraDirs = [realCwd];
   if (permissions.read) extraDirs.push(...permissions.read);
   if (permissions.write) extraDirs.push(...permissions.write);
+  // esbuild-wasm runs fully in-process (lib/browser.js, worker:false), but it
+  // reads the package's esbuild.wasm payload once at first transform. Pre-allow
+  // that one read so REPL startup never fires broker elicitation — this replaces
+  // the native esbuild binary path pre-approval that the run-spawning backend
+  // required.
+  try {
+    const wasmDir = fileURLToPath(
+      new URL("..", import.meta.resolve("esbuild-wasm/lib/browser.js")),
+    );
+    extraDirs.push(wasmDir);
+  } catch { /* keep going if resolution fails */ }
 
   const ctx: RunElicitContext = {
     codeHash: null,
     codexCeiling,
     extraDirs,
   };
-  let esbuildBinaryPath: string | null = null;
-
-  // Resolve the exact native esbuild binary path for broker pre-approval,
-  // so esbuild initialisation does not fire broker elicitation during REPL startup.
-  // esbuild spawns a platform-specific native binary via child_process.spawn().
-  // Path pattern: .../npm/registry.npmjs.org/@esbuild/<platform>/<version>/bin/esbuild
-  {
-    const esbuildUrl = import.meta.resolve("npm:esbuild");
-    // esbuildUrl: file:///.../npm/registry.npmjs.org/esbuild/0.25.12/lib/main.js
-    const m = esbuildUrl.match(/\/esbuild\/([\d.]+)\//);
-    if (m) {
-      const version = m[1];
-      // Map Deno arch to esbuild's npm package naming
-      // deno: aarch64 → esbuild: arm64; deno: x86_64 → esbuild: x64
-      const archMap: Record<string, string> = {
-        aarch64: "arm64",
-        x86_64: "x64",
-      };
-      const esbuildArch = archMap[Deno.build.arch] ?? Deno.build.arch;
-      const platformPkg = "@esbuild/" + Deno.build.os + "-" + esbuildArch;
-      const esbuildPath = esbuildUrl.replace(
-        /\/esbuild\/[\d.]+\/.*$/,
-        "/" + platformPkg + "/" + version + "/bin/esbuild",
-      );
-      esbuildBinaryPath = await Deno.realPath(fileURLToPath(esbuildPath));
-      ctx.preApprovedRunPaths = [esbuildBinaryPath];
-    }
-  }
 
   const policy = createRunBrokerPolicy(ctx);
   if (options.onElicit) {
