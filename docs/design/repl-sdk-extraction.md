@@ -252,8 +252,7 @@ export interface ReplKernel {
 `[Symbol.asyncDispose]` are the same release path, so both explicit
 `await kernel.dispose()` and `await using kernel = await createReplKernel()`
 work. The install utils likewise return a `Restore` type — callable and
-`Disposable` (`using _ = installConsoleCapture(...)` restores on block
-exit).
+`Disposable` (`using _ = installConsoleCapture(...)` restores on block exit).
 
 The kernel takes **one option** — an injectable cell transformer — and is
 otherwise a pure evaluator plus per-execution output streams:
