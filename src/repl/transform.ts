@@ -18,6 +18,18 @@ type EstreeNode = Record<string, unknown> & {
   end?: number;
 };
 
+/**
+ * Transform a cell's source so it runs in a persistent scope: import
+ * declarations become `scope.x = (await import(...)).x`, variable/function/
+ * class declarations become `scope.x = ...`, references to declared names are
+ * rewritten to `scope.x` (closure-aware), and the last expression is
+ * auto-returned. The output is a `return (async () => {...})()` body (top-level
+ * await) intended for a `new AsyncFunction("scope", ...)` wrapper.
+ *
+ * @param code ESM source (typically esbuild-transformed TS → ESM).
+ * @param declaredNames Accumulates declared names; pass the same set across
+ *   cells so earlier declarations keep resolving.
+ */
 export function transform(
   code: string,
   declaredNames: Set<string>,
@@ -301,6 +313,12 @@ function transformClassDecl(
 // handle closures correctly
 // ============================================================
 
+/**
+ * Rewrite identifier references to `scope.<name>` for every name in
+ * `declaredNames`, skipping locals shadowed inside functions/blocks (closure
+ * and shadowing aware). Used internally by `transform`; exported for hosts
+ * that assemble their own pipeline.
+ */
 export function rewriteReferences(
   code: string,
   declaredNames: Set<string>,

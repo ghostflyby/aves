@@ -3,10 +3,9 @@
 //
 // Owns the persistent scope and the esbuild-wasm + AST transform
 // pipeline behind the AsyncFunction wrapper (top-level await). The
-// engine is a pure evaluator: it installs no globals and emits no
-// events — output routing (console.*, Deno.jupyter.*, prompt) is
-// host-owned and wired to ReplExecution.emit via the SDK utils
-// (design doc §5.2).
+// engine is a pure evaluator: it installs no globals and produces
+// no output events — global wiring (console.*, prompt, Deno.jupyter.*)
+// is host-owned (design doc §5.2).
 // ============================================================
 
 import esbuildWasmCjs from "esbuild-wasm/lib/browser.js";
@@ -52,15 +51,23 @@ function getTransform(): Promise<CodeTransform> {
   return transformPromise;
 }
 
+/**
+ * In-process cell evaluator. Holds the persistent scope and declared-name
+ * set shared across executions, and drives transform → AST rewrite →
+ * AsyncFunction (top-level await). A lower-level building block; most hosts
+ * use `createReplKernel` instead.
+ */
 export class EvalEngine {
+  /** Persistent scope object cells assign declarations into. */
   readonly scope: Record<string, unknown> = {};
+  /** Names declared by executed cells (drives reference rewriting). */
   readonly declaredNames: Set<string> = new Set();
   #disposed = false;
   #transform: CodeTransform | null;
 
   /**
-   * @param transform An injected cell transformer. Defaults to the
-   *   process-global esbuild-wasm singleton (see getTransform).
+   * @param options.transform Injected cell transformer. Defaults to the
+   *   process-global esbuild-wasm singleton (shared by all engines).
    */
   constructor(options?: { transform?: CodeTransform }) {
     this.#transform = options?.transform ?? null;
@@ -102,6 +109,7 @@ export class EvalEngine {
     this.declaredNames.clear();
   }
 
+  /** Free the engine; runCell rejects afterwards. */
   dispose(): void {
     this.#disposed = true;
   }

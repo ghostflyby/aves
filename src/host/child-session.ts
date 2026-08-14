@@ -20,13 +20,17 @@ import { createRunBrokerPolicy, type RunElicitContext } from "./policy.ts";
 import type { Permissions } from "../types.ts";
 import type { SandboxState } from "../sandbox-state.ts";
 
+/** Result of one REPL evaluation (mirrors ReplEvalResult over the wire). */
 export interface ReplResult {
   ok: boolean;
+  /** Final-expression value from the child. */
   data?: unknown;
   error?: string;
+  /** True when the child's state is unusable (e.g. eval timeout). */
   fatal?: boolean;
 }
 
+/** Public metadata about a live REPL session (used by list/create). */
 export interface ReplSessionInfo {
   id: string;
   description: string;
@@ -36,6 +40,12 @@ export interface ReplSessionInfo {
   cwd: string;
 }
 
+/**
+ * A live REPL child session. Owns the spawned `deno run boot.ts` process and
+ * its permission broker, drives the stdio protocol, and supervises lifecycle
+ * (eval timeouts → SIGKILL escalation, close/restart). Host-side assembly per
+ * design doc §5.3 — the SDK kernel never spawns or kills anything.
+ */
 export class ReplSession {
   readonly id: string;
   readonly description: string;
@@ -166,6 +176,10 @@ export class ReplSession {
     }
   }
 
+  /**
+   * Evaluate one cell in this session. `timeoutMs` (or the session default)
+   * escalates to SIGKILL on expiry and marks the session `fatal`.
+   */
   eval(code: string, timeoutMs?: number): Promise<ReplResult> {
     if (this.closed) {
       return Promise.resolve({ ok: false, error: "session closed" });
@@ -209,6 +223,7 @@ export class ReplSession {
     });
   }
 
+  /** Public session metadata (id, pid, eval count, cwd, timestamps). */
   getInfo(): ReplSessionInfo {
     return {
       id: this.id,
@@ -220,6 +235,7 @@ export class ReplSession {
     };
   }
 
+  /** Gracefully close the session; escalates to SIGKILL after a short wait. */
   async close(): Promise<void> {
     if (this.cleanupStarted) {
       await this.cleanupStarted;
@@ -315,15 +331,27 @@ const DEFAULT_IMPORT_DOMAINS = [
   "registry.npmjs.org:443",
 ];
 
+/** Options for spawnReplSession. */
 export interface SpawnOptions {
+  /** Human-readable session label (default: "REPL <id8>"). */
   description?: string;
+  /** Working directory for the child (default: current process cwd). */
   cwd?: string;
+  /** Read/write paths granted up front (added to the broker's extraDirs). */
   permissions?: Permissions;
+  /** Codex sandbox ceiling passed to the default policy (null = read-only auto-approve). */
   codexCeiling?: SandboxState | null;
+  /** Default per-eval timeout; expires → SIGKILL + fatal. */
   timeoutMs?: number;
+  /** Broker elicitation handler; without it elicits resolve false (deny). */
   onElicit?: (req: PermissionRequest, resolve: ElicitResolver) => Promise<void>;
 }
 
+/**
+ * Spawn a `deno run src/repl/boot.ts` child with a permission broker, default
+ * import allowlist, and the given cwd/env, returning a supervised
+ * `ReplSession`. Host-side assembly per design doc §5.3.
+ */
 export async function spawnReplSession(
   options: SpawnOptions = {},
 ): Promise<ReplSession> {

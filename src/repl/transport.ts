@@ -27,6 +27,14 @@ interface Executable {
   ): { result: Promise<ReplEvalResult> };
 }
 
+/**
+ * Newline-delimited JSON codec for a child process whose stdin/stdout is the
+ * protocol channel. Pure I/O: parses `eval` / `close` lines, drives a
+ * kernel's `execute`, and writes `result` / `closed` lines — it never spawns
+ * or supervises a process (design doc §5.4). The wire protocol is
+ * byte-identical to Aves' legacy repl child; `timeout_ms` maps to an
+ * `AbortSignal.timeout`.
+ */
 export class StdioTransport {
   /**
    * Drive `kernel` from a stdin/stdout channel until the child sends

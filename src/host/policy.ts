@@ -69,6 +69,10 @@ const DEFAULT_ALLOWED_ENV = new Set([
   "NODE_V8_COVERAGE",
 ]);
 
+/**
+ * Import domains auto-allowed on the child's command line (`--allow-import`)
+ * and in the default policy. Imports from any other host are hard-denied.
+ */
 export const DEFAULT_IMPORT_DOMAINS = [
   "deno.land:443",
   "jsr.io:443",
@@ -98,6 +102,10 @@ function resolveTempDirs(): string[] {
   return dirs;
 }
 
+/**
+ * True when the request falls in the always-allow defaults: safe sys kinds,
+ * safe/all NODE_ env vars, temp-dir read/write, allowlisted import/net hosts.
+ */
 export function isDefaultAllowed(
   req: { permission: PermissionKind; value: string },
 ): boolean {
@@ -130,6 +138,10 @@ export function isDefaultAllowed(
 // Path matching (handles macOS /var -> /private/var symlink)
 // ============================================================
 
+/**
+ * Prefix match between an allowed path and a requested one, tolerant of the
+ * macOS `/var` → `/private/var` symlink and trailing slashes.
+ */
 export function pathMatches(allowed: string, requested: string): boolean {
   if (requested.startsWith(allowed)) return true;
   const normReq = requested.replace(/^\/private/, "");
@@ -138,9 +150,15 @@ export function pathMatches(allowed: string, requested: string): boolean {
 }
 
 // ============================================================
-// createRunBrokerPolicy — the example decision chain
+// createRunBrokerPolicy — the default decision chain
 // ============================================================
 
+/**
+ * Build Aves' default permission decision chain for the broker:
+ * always-allow defaults → pre-approved run paths → import hard-deny →
+ * optional mid-decision hook (e.g. a skill mod.permission.ts) → extraDirs
+ * read/write → read-only-without-ceiling → elicit (user has final say).
+ */
 export function createRunBrokerPolicy(
   ctx: RunElicitContext,
   midDecide?: MidDecideHook,

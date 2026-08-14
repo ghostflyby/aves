@@ -10,7 +10,11 @@
 // them entirely.
 // ============================================================
 
-/** Async input channel (Jupyter input_request, control socket, ...). */
+/**
+ * Async input channel used to answer `prompt()`/`confirm()` — a Jupyter
+ * `input_request` round-trip, a control-socket query, a terminal, etc. The
+ * return is a Promise because the channel is asynchronous.
+ */
 export type InputFn = (
   prompt: string,
   options?: { password?: boolean },
