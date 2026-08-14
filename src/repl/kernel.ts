@@ -2,12 +2,12 @@
 // src/repl/kernel.ts — createReplKernel
 //
 // In-process evaluation kernel. Executions run serially (FIFO) on
-// a shared persistent scope; each execution exposes a pull-based
-// console-output stream plus an `emit` port for host-routed console
-// capture, and a resident AbortController as its cancellation
-// handle + event source. The kernel owns NO child process and
-// installs NO globals — hosts decide the process, the supervision,
-// and any global wiring (design doc §5.3).
+// a shared persistent scope and expose a resident AbortController
+// as their cancellation handle + event source. The kernel's only
+// job is evaluation; it produces no output events and installs no
+// globals — hosts attribute their own console.* / Deno.jupyter.*
+// wiring to the in-flight cell via kernel.current, and own the
+// process, the supervision, and any routing (design doc §5.3).
 // ============================================================
 
 import { EvalEngine } from "./eval-engine.ts";
@@ -16,76 +16,11 @@ import type {
   ReplExecution,
   ReplKernel,
   ReplKernelOptions,
-  ReplOutputEvent,
 } from "./types.ts";
-
-/**
- * Bound the output buffer before `emit()` starts waiting on the consumer
- * (backpressure). The stream's own high-water mark is the read-side cap.
- */
-const OUTPUT_HIGH_WATER_MARK = 64;
-
-class ExecutionOutput {
-  readonly stream: ReadableStream<ReplOutputEvent>;
-  #controller: ReadableStreamDefaultController<ReplOutputEvent> | null = null;
-  private closed = false;
-  private waiters: Array<() => void> = [];
-
-  constructor() {
-    this.stream = new ReadableStream<ReplOutputEvent>({
-      start: (controller) => {
-        this.#controller = controller;
-      },
-      pull: () => this.resolveWaiters(),
-      cancel: () => {
-        this.closed = true;
-        this.resolveWaiters();
-      },
-    }, { highWaterMark: OUTPUT_HIGH_WATER_MARK });
-  }
-
-  /**
-   * Route an event into the stream. Returns a promise when the consumer has
-   * not kept up (backpressure) — hosts that want flow control await it; hosts
-   * that only care about ordering may ignore it (events still buffer).
-   */
-  emit(event: ReplOutputEvent): void | Promise<void> {
-    if (this.closed) return;
-    try {
-      this.#controller!.enqueue(event);
-    } catch {
-      this.closed = true;
-      this.resolveWaiters();
-      return;
-    }
-    if ((this.#controller!.desiredSize ?? 0) < 0) {
-      return new Promise<void>((resolve) => this.waiters.push(resolve));
-    }
-  }
-
-  close(): void {
-    if (this.closed) return;
-    this.closed = true;
-    this.resolveWaiters();
-    try {
-      this.#controller!.close();
-    } catch { /* already closed */ }
-  }
-
-  private resolveWaiters(): void {
-    if (this.waiters.length === 0) return;
-    if (this.closed || (this.#controller!.desiredSize ?? 0) > 0) {
-      const ws = this.waiters;
-      this.waiters = [];
-      for (const resolve of ws) resolve();
-    }
-  }
-}
 
 interface QueueItem {
   code: string;
   controller: AbortController;
-  sink: ExecutionOutput;
   resolveResult: (result: ReplEvalResult) => void;
   execution: ReplExecution;
 }
@@ -121,7 +56,6 @@ export function createReplKernel(
         ok: false,
         error: abortMessage(item.controller.signal),
       });
-      item.sink.close();
       return;
     }
     try {
@@ -134,8 +68,6 @@ export function createReplKernel(
         ok: false,
         error: err instanceof Error ? err.message : String(err),
       });
-    } finally {
-      item.sink.close();
     }
   }
 
@@ -146,7 +78,6 @@ export function createReplKernel(
 
     execute(code, options) {
       const controller = new AbortController();
-      const sink = new ExecutionOutput();
       const executionId = ++executionCounter;
       let resolveResult!: (result: ReplEvalResult) => void;
       const result = new Promise<ReplEvalResult>((resolve) => {
@@ -173,24 +104,15 @@ export function createReplKernel(
 
       const execution: ReplExecution = {
         executionId,
-        outputs: sink.stream,
         controller,
         signal: controller.signal,
         result,
-        emit: (event) => sink.emit(event),
       };
-      const item: QueueItem = {
-        code,
-        controller,
-        sink,
-        resolveResult,
-        execution,
-      };
+      const item: QueueItem = { code, controller, resolveResult, execution };
 
       if (disposed) {
         queueMicrotask(() => {
           resolveResult({ ok: false, error: "kernel disposed" });
-          sink.close();
         });
       } else {
         queue.push(item);
@@ -228,7 +150,6 @@ export function createReplKernel(
     const pending = queue.splice(0);
     for (const item of pending) {
       item.resolveResult({ ok: false, error: "kernel disposed" });
-      item.sink.close();
     }
     engine.dispose();
     return Promise.resolve();

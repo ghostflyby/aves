@@ -108,26 +108,26 @@ Notable facts confirmed by reading:
 ```text
 src/repl/                         <- the SDK (host-neutral; owns NO child process)
     mod.ts                          public exports
-    types.ts                        ReplExecution, ReplOutputEvent, ReplKernel,
-                                    ReplEvalResult, ReplSnapshot
+    types.ts                        ReplExecution, ReplKernel, ReplEvalResult,
+                                    ReplSnapshot, ReplKernelOptions
     transform.ts                    (unchanged, moved as-is)
     eval-engine.ts                  esbuild-wasm init + cell transform + scope +
-                                    AsyncFunction; installs prompt/confirm and
-                                    (optionally) console capture
-    kernel.ts                       createReplKernel(runtime): in-process evaluation
-                                    kernel; owns NO child process
+                                    AsyncFunction (pure evaluator; no globals)
+    kernel.ts                       createReplKernel(options): in-process evaluation
+                                    kernel; owns NO child process; produces no
+                                    output events (final-expression value only)
     transport.ts                    StdioTransport: newline-JSON protocol codec
                                     bound to a ReplKernel (pure I/O; does NOT
                                     spawn or supervise)
-    utils.ts                        host-side global installs (console capture,
-                                    prompt/confirm -> emit/input channel);
-                                    library functions, not kernel options
+    utils.ts                        host-side global install (prompt/confirm ->
+                                    input channel); library function, not a
+                                    kernel option
     boot.ts                         default child entry: createReplKernel +
                                     StdioTransport over stdin/stdout (reference
                                     assembly; external hosts write their own entry
                                     bound to their own transport)
-    jupyter/                        optional Jupyter-compat shim (Deno.jupyter.* ->
-                                    runtime events) + MIME formatting helpers
+    jupyter/                        optional host-owned shim + MIME helpers
+                                    (design: host wires Deno.jupyter.* itself)
 
 src/host/                         <- host-side assembly (Aves as one host)
     child-session.ts                (rehomed from session.ts) spawns `deno run boot.ts`
@@ -159,11 +159,6 @@ The SDK must import only: `node:` built-ins, `acorn`, `astring`, and
 ```ts
 // types.ts
 
-/** Console output produced during a single execution. */
-export type ReplOutputEvent =
-  | { kind: "stdout"; text: string }
-  | { kind: "stderr"; text: string };
-
 export interface ReplEvalResult {
   ok: boolean;
   /** Final-expression value (host may ignore in notebook mode). */
@@ -181,12 +176,6 @@ export interface ReplExecution {
   /** Monotonic sequence number (Jupyter execution_count counterpart). */
   readonly executionId: number;
   /**
-   * Pull-based stream of this cell's structured output. The host consumes it
-   * with pipeTo / for await / tee; `emit()` routes additional events into the
-   * same stream while it is open.
-   */
-  readonly outputs: ReadableStream<ReplOutputEvent>;
-  /**
    * This execution's resident AbortController. `signal` is `controller.signal`,
    * so `controller` is both the handle to cancel this execution after the fact
    * and a reliable cancellation event source: every cancellation source — the
@@ -196,10 +185,8 @@ export interface ReplExecution {
   readonly controller: AbortController;
   /** This execution's cancellation signal (`=== controller.signal`). */
   readonly signal: AbortSignal;
-  /** Settles when the cell's async IIFE settles (the stream closes after). */
+  /** Settles when the cell's async IIFE settles. */
   readonly result: Promise<ReplEvalResult>;
-  /** Route an output event into this execution's stream. */
-  emit(event: ReplOutputEvent): void | Promise<void>;
 }
 
 export interface ReplSnapshot {
@@ -242,10 +229,10 @@ export interface ReplKernel {
 `[Symbol.asyncDispose]` are the same release path, so both explicit
 `await kernel.dispose()` and `await using kernel = await createReplKernel()`
 work. The install utils likewise return a `Restore` type — callable and
-`Disposable` (`using _ = installConsoleCapture(...)` restores on block exit).
+`Disposable` (`using _ = installPromptInput(...)` restores on block exit).
 
 The kernel takes **one option** — an injectable cell transformer — and is
-otherwise a pure evaluator plus per-execution output streams:
+otherwise a pure evaluator plus a resident-cancellation handle per execution:
 
 ```ts
 /** Cell transformer: esbuild-compatible contract (TS/JS code in, ESM out). */
@@ -284,29 +271,13 @@ const kernel = await createReplKernel({
 });
 ```
 
-Every global install (console.*, prompt/confirm, `Deno.jupyter.*`) is host-owned
-and wired to `ReplExecution.emit` / the host's own input channel via the SDK
-utils (`src/repl/utils.ts`), which are library functions — **not** kernel
-options:
-
-```ts
-// utils.ts — host-side installs; return restore functions
-export function installConsoleCapture(
-  emit: (event: ReplOutputEvent) => void,
-): () => void;
-export type InputFn = (
-  prompt: string,
-  options?: { password?: boolean },
-) => Promise<string>;
-export function installPromptInput(input: InputFn): () => void;
-```
-
-The SDK deliberately exposes **only console events** (`stdout`/`stderr`).
-Jupyter projections — MIME `execute_result` / `display_data` / `clear_output`
-(displayId, update, traceback, executionCount) — are notebook-wire concepts that
-hosts derive from `ReplEvalResult` + `executionId` and route through their own
-channels; the MIME bundle shape is host-owned (Phase 3 provides optional
-formatting helpers).
+The SDK produces **no output events** — its only result is `ReplEvalResult` (the
+final-expression value is the one thing a host cannot capture itself). Every
+global install (console.*, prompt/confirm, `Deno.jupyter.*`) is host-owned;
+hosts attribute their own console capture to the in-flight cell via
+`kernel.current` and route through their own channels. `src/repl/utils.ts`
+provides the shared wiring helper as a library function — **not** a kernel
+option:
 
 ### 5.3 Lifecycle ownership: process boundary = host boundary
 
@@ -318,8 +289,8 @@ process.** The SDK is deliberately process-agnostic:
   path, startup/execution/shutdown timeouts, SIGINT→SIGKILL escalation, restart,
   PID registration, and process-tree cleanup on host exit.
 - **SDK-owned**: everything inside the child — scope persistence, top-level
-  await, import rewriting, structured output/input, cooperative interrupt,
-  `Deno.jupyter`-compat, and the stdio JSON protocol codec.
+  await, import rewriting, the final-expression result, cooperative interrupt,
+  and the stdio JSON protocol codec.
 
 Rationale:
 
@@ -354,13 +325,25 @@ binds its own transport (control channel, socket, ...) to the kernel:
 
 ```ts
 // custom-host child entry (e.g. Maieutics' injected bootstrap)
-import { createReplKernel, installConsoleCapture } from "@ghostflyby/aves/repl";
+import { createReplKernel, installPromptInput } from "@ghostflyby/aves/repl";
 
 const kernel = await createReplKernel(); // no options; installs no globals
 
-// host wiring (its own bootstrap): route output + input to the control channel
+// host wiring (its own bootstrap): route console + input to the control channel
 let current: ReplExecution | null = null;
-const restoreConsole = installConsoleCapture((e) => current?.emit(e));
+const routeConsole = (kind: "stdout" | "stderr") => (...args: unknown[]) => {
+  const ex = current ?? kernel.current; // attribute to the in-flight cell
+  if (ex) {
+    channel.send({
+      type: "repl.output",
+      msgId: currentMsgId,
+      kind,
+      text: fmt(args),
+    });
+  }
+};
+globalThis.console.log = routeConsole("stdout");
+globalThis.console.error = routeConsole("stderr");
 // prompt/confirm via the host's own async input channel, e.g.:
 //   installPromptInput((p) => controlChannel.inputRequest(p))
 
@@ -369,11 +352,6 @@ channel.on("execute", ({ code, msgId, timeoutMs }) => {
   current = ex;
   channel.send({ type: "repl.busy", msgId });
   const route = async () => {
-    await ex.outputs.pipeTo(
-      new WritableStream({
-        write: (e) => channel.send({ type: "repl.output", msgId, event: e }),
-      }),
-    );
     const result = await ex.result;
     channel.send({ type: "repl.idle", msgId, result });
     if (result.fatal) restartSession(msgId); // host-owned recovery
@@ -484,19 +462,22 @@ Host process (Maieutics executable, .NET)              <- owns the child process
 deno run <injected entry> (spawned by the host with restrictive --allow-* + broker)
     sdk boot entry:
         createReplKernel()                       <- no options, no globals
-        host wires console/prompt/Deno.jupyter to ex.emit / its input channel
+        host wires console/prompt/Deno.jupyter itself (kernel.current for
+        cell attribution) + its own input channel
         -> kernel.execute(code, { signal }) on execute messages
-        -> ex.outputs.pipeTo(host channel); await ex.result -> busy/idle
+        -> await ex.result -> busy/idle (final-expression value)
     DENO_PERMISSION_BROKER_PATH -> host broker policy
         (workspace allow / config policy / deny)
 ```
 
 Everything the host needs — scope persistence, top-level await, import
-rewriting, `Deno.jupyter.display`, `prompt`, and cooperative interrupt — is
-inside the SDK kernel. The host supplies only the channel, the permission
-policy, its own session registry, and (per §5.3) **all process supervision**:
-the SDK neither spawns nor kills the child, and recovery from a `fatal` eval
-result is entirely a host decision.
+rewriting, the final-expression value, and cooperative interrupt — is inside the
+SDK kernel. Output routing (console.*, `Deno.jupyter.*`) is host wiring: the
+host patches its globals and attributes to `kernel.current`, then routes through
+its own channels. The host supplies only the channel, the permission policy, its
+own session registry, and (per §5.3) **all process supervision**: the SDK
+neither spawns nor kills the child, and recovery from a `fatal` eval result is
+entirely a host decision.
 
 ## 7. Migration plan
 
@@ -517,12 +498,11 @@ result is entirely a host decision.
 
 ### Phase 2 — SDK extraction (DONE)
 
-- `transform.ts` moved as-is; `types.ts` (`ReplExecution`, `ReplOutputEvent`,
-  `ReplKernel`, `ReplSnapshot`), `eval-engine.ts` (`EvalEngine`), `kernel.ts`
-  (`createReplKernel`), `transport.ts` (`StdioTransport`), `utils.ts`
-  (`installConsoleCapture`, `installPromptInput`), `mod.ts` (SDK surface) added.
-  The SDK imports only `node:` built-ins, `acorn`, `astring`, and
-  `esbuild-wasm`.
+- `transform.ts` moved as-is; `types.ts` (`ReplExecution`, `ReplKernel`,
+  `ReplSnapshot`, `ReplKernelOptions`), `eval-engine.ts` (`EvalEngine`),
+  `kernel.ts` (`createReplKernel`), `transport.ts` (`StdioTransport`),
+  `utils.ts` (`installPromptInput`), `mod.ts` (SDK surface) added. The SDK
+  imports only `node:` built-ins, `acorn`, `astring`, and `esbuild-wasm`.
 - `src/host/child-session.ts` + `manager.ts` + `policy.ts` own Aves'
   spawn/supervision and its default BrokerPolicy; `mcp/server.ts`,
   `mcp/resources.ts`, `main.ts`, `transform_test.ts` updated;
@@ -530,22 +510,24 @@ result is entirely a host decision.
 - `src/runner.ts` policy logic moved to `src/host/policy.ts`; runner re-exports
   and passes the skill permission module as the policy's `MidDecideHook`.
 - `src/repl/mod.ts` and `src/mod.ts` export the SDK + host assemblies.
-- New unit tests: `kernel_test.ts` (17 cases: FIFO serialization, scope
-  persistence, top-level await, per-execution output stream + emit port,
-  interrupt / abort() / AbortSignal.timeout / pre-aborted signal, executionId,
-  snapshot/reset, dispose) and `transport_test.ts` (7 cases, pure framing:
-  round-trip, `timeout_ms` → AbortSignal mapping, error fallback, malformed-line
-  tolerance, EOF). All unit suites green; `deno check`, `lint`, `fmt` clean.
+- New unit tests: `kernel_test.ts` (FIFO serialization, scope persistence,
+  top-level await, final-expression results, interrupt / controller /
+  AbortSignal.timeout / pre-aborted signal, executionId, snapshot/reset,
+  dispose/await-using) and `transport_test.ts` (pure framing: round-trip,
+  `timeout_ms` → AbortSignal mapping, error fallback, malformed-line tolerance,
+  EOF). All unit suites green; `deno check`, `lint`, `fmt` clean.
 
 ### Phase 2 — v2 API redesign (DONE)
 
-The SDK was redesigned pre-1.0 around Deno Web APIs and host neutrality:
+The SDK was redesigned pre-1.0 around host neutrality and minimal surface:
 
-- **Output = per-execution `ReadableStream`** (`execute()` returns a
-  `ReplExecution` with `outputs`, pull-based) plus an `emit` port for
-  host-routed events (console capture, `Deno.jupyter.display`). Not an injected
-  callback: notebook hosts need per-cell output routing (iopub parent message)
-  and `tee()`/`pipeTo` composition.
+- **The SDK produces no output events.** Its only result is `ReplEvalResult` —
+  the final-expression value is the one thing a host cannot capture itself
+  (persistent scope, top-level await, import rewriting). Console output,
+  `Deno.jupyter.*`, and prompt/confirm are all host wiring: the host patches its
+  globals, attributes to the in-flight cell via `kernel.current`, and routes
+  through its own channels. Earlier output-stream/emit designs were dropped once
+  `kernel.current` gave hosts the same execution context.
 - **Cancellation = a resident AbortController per execution** — the handle
   exposes `controller` (its own `AbortSignal`), so `controller.signal` is a
   reliable cancellation event source: every source (`execute({ signal })` token,
@@ -554,16 +536,13 @@ The SDK was redesigned pre-1.0 around Deno Web APIs and host neutrality:
   (no leaks on long-lived host signals). `timeoutMs` options are gone;
   `AbortSignal.timeout(ms)` maps to the host-token bridge. `kernel.current`
   exposes the in-flight execution; `interrupt()` is
-  `current?.controller
-  .abort()`.
-- **Kernel takes no options and installs no globals.** All global wiring
-  (console.*, prompt/confirm, `Deno.jupyter.*`) is host-owned and wired to
-  `ReplExecution.emit` / the host's input channel via `src/repl/utils.ts`
-  (library functions, not kernel options). `ReplRuntime` (emit/requestInput/
-  onEvalStart/onEvalEnd) is deleted; busy/idle derives from the handle.
-- FIFO serialization because executions share the persistent scope; queued
-  executions' streams stay quiet until their turn. Output stream enforces
-  backpressure at its high-water mark.
+  `current?.controller.abort()`.
+- **The kernel takes one option** (`transform`, the cell transformer — its only
+  third-party dependency, injected so hosts can share a worker pool / prebundled
+  wasm / test stub) and installs no globals. `ReplRuntime`
+  (emit/requestInput/onEvalStart/onEvalEnd) is deleted; busy/idle derives from
+  the handle.
+- FIFO serialization because executions share the persistent scope.
 
 ### Phase 2 — findings that changed the design
 
@@ -591,13 +570,12 @@ The SDK was redesigned pre-1.0 around Deno Web APIs and host neutrality:
 ### Phase 3 — Jupyter-compat shim (host-owned)
 
 - `Deno.jupyter` namespace (`display`, `html`/`md`/`svg`/`image`, `format`,
-  `$display`) is host-owned: the SDK emits only console events, so hosts that
-  want `Deno.jupyter.display` to project MIME bundles need their own
-  per-execution display channel (they can multiplex it through `emit` or their
-  own stream/transport). The SDK may provide MIME formatting helpers (extracted
-  so notebook hosts share them) plus the wiring skeleton; it never installs the
-  namespace itself. `Deno.jupyter.input` is host territory just like `prompt`.
-  Out of scope for the MCP server; unit-tested against a fake execution.
+  `$display`) is host-owned: the SDK emits no output events, so hosts wire
+  `Deno.jupyter.display` to their own display channel (attributing to
+  `kernel.current` like console). The SDK may provide MIME formatting helpers
+  (extracted so notebook hosts share them) plus a wiring skeleton; it never
+  installs the namespace itself. `Deno.jupyter.input` is host territory just
+  like `prompt`. Out of scope for the MCP server.
 
 ### Phase 4 — example custom entry + docs
 

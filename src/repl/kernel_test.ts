@@ -2,9 +2,9 @@
 // src/repl/kernel_test.ts — createReplKernel unit tests
 //
 // Exercises the in-process kernel: FIFO serialization, scope
-// persistence, top-level await, per-execution output streams,
-// emit port, interrupt, AbortSignal cancellation, snapshot/reset.
-// No child processes are involved.
+// persistence, top-level await, final-expression results,
+// interrupt, AbortSignal cancellation, snapshot/reset. No child
+// processes are involved.
 // ============================================================
 
 import {
@@ -13,23 +13,7 @@ import {
   assertStringIncludes,
 } from "@std/assert";
 import { createReplKernel } from "./kernel.ts";
-import type {
-  ReplEvalResult,
-  ReplExecution,
-  ReplOutputEvent,
-} from "./types.ts";
-
-async function collect(ex: ReplExecution): Promise<ReplOutputEvent[]> {
-  const events: ReplOutputEvent[] = [];
-  await ex.outputs.pipeTo(
-    new WritableStream<ReplOutputEvent>({
-      write(event) {
-        events.push(event);
-      },
-    }),
-  );
-  return events;
-}
+import type { ReplEvalResult, ReplExecution } from "./types.ts";
 
 async function evalCollect(
   kernel: {
@@ -37,26 +21,23 @@ async function evalCollect(
   },
   code: string,
   options?: { signal?: AbortSignal },
-): Promise<{ result: ReplEvalResult; events: ReplOutputEvent[] }> {
-  const ex = kernel.execute(code, options);
-  const eventsP = collect(ex);
-  const result = await ex.result;
-  return { result, events: await eventsP };
+): Promise<ReplEvalResult> {
+  return await kernel.execute(code, options).result;
 }
 
 Deno.test("kernel - persists declarations across evals", async () => {
   const kernel = await createReplKernel();
   const r1 = await evalCollect(kernel, "const x = 1");
-  assertEquals(r1.result.ok, true);
+  assertEquals(r1.ok, true);
   const r2 = await evalCollect(kernel, "x + 1");
-  assertEquals(r2.result.ok, true);
-  assertEquals(r2.result.data, 2);
+  assertEquals(r2.ok, true);
+  assertEquals(r2.data, 2);
   await kernel.dispose();
 });
 
 Deno.test("kernel - auto-returns final expression", async () => {
   const kernel = await createReplKernel();
-  const { result } = await evalCollect(kernel, "1 + 1");
+  const result = await evalCollect(kernel, "1 + 1");
   assertEquals(result.ok, true);
   assertEquals(result.data, 2);
   await kernel.dispose();
@@ -64,7 +45,7 @@ Deno.test("kernel - auto-returns final expression", async () => {
 
 Deno.test("kernel - top-level await", async () => {
   const kernel = await createReplKernel();
-  const { result } = await evalCollect(
+  const result = await evalCollect(
     kernel,
     "const p = await Promise.resolve(99); p + 1",
   );
@@ -75,7 +56,7 @@ Deno.test("kernel - top-level await", async () => {
 
 Deno.test("kernel - runtime error yields ok:false with message", async () => {
   const kernel = await createReplKernel();
-  const { result } = await evalCollect(kernel, 'throw new Error("boom")');
+  const result = await evalCollect(kernel, 'throw new Error("boom")');
   assertEquals(result.ok, false);
   assertStringIncludes(result.error ?? "", "boom");
   await kernel.dispose();
@@ -84,26 +65,10 @@ Deno.test("kernel - runtime error yields ok:false with message", async () => {
 Deno.test("kernel - class declaration persists across evals", async () => {
   const kernel = await createReplKernel();
   const r1 = await evalCollect(kernel, "class Foo { static v = 42 }");
-  assertEquals(r1.result.ok, true);
+  assertEquals(r1.ok, true);
   const r2 = await evalCollect(kernel, "Foo.v");
-  assertEquals(r2.result.ok, true);
-  assertEquals(r2.result.data, 42);
-  await kernel.dispose();
-});
-
-Deno.test("kernel - emit routes console events into the execution stream", async () => {
-  const kernel = await createReplKernel();
-  const ex = kernel.execute("await new Promise(r => setTimeout(r, 20)); 1");
-  ex.emit({ kind: "stdout", text: "hello" });
-  ex.emit({ kind: "stderr", text: "oops" });
-  const result = await ex.result;
-  const events = await collect(ex);
-  assertEquals(result.ok, true);
-  assertEquals(result.data, 1);
-  assertEquals(events, [
-    { kind: "stdout", text: "hello" },
-    { kind: "stderr", text: "oops" },
-  ]);
+  assertEquals(r2.ok, true);
+  assertEquals(r2.data, 42);
   await kernel.dispose();
 });
 
@@ -117,7 +82,7 @@ Deno.test("kernel - FIFO serialization across queued executions", async () => {
   await a.result;
   await b.result;
   const r = await evalCollect(kernel, "log.join(',')");
-  assertEquals(r.result.data, "a-start,a-end,b");
+  assertEquals(r.data, "a-start,a-end,b");
   await kernel.dispose();
 });
 
@@ -237,7 +202,7 @@ Deno.test("kernel - injected transform is used and receives loader/format", asyn
     return Promise.resolve({ code }); // passthrough; the transformer runs it directly below
   };
   const kernel = await createReplKernel({ transform });
-  const { result } = await evalCollect(kernel, "1 + 1");
+  const result = await evalCollect(kernel, "1 + 1");
   assertEquals(result.ok, true);
   assertEquals(result.data, 2);
   assertEquals(called, 1);
@@ -250,10 +215,10 @@ Deno.test("kernel - custom transform still runs through the AST pipeline", async
   const transform = (code: string) => Promise.resolve({ code });
   const kernel = await createReplKernel({ transform });
   const r1 = await evalCollect(kernel, "const deep = 1");
-  assertEquals(r1.result.ok, true);
+  assertEquals(r1.ok, true);
   const r2 = await evalCollect(kernel, "deep + 1");
-  assertEquals(r2.result.ok, true);
-  assertEquals(r2.result.data, 2);
+  assertEquals(r2.ok, true);
+  assertEquals(r2.data, 2);
   await kernel.dispose();
 });
 
@@ -261,7 +226,7 @@ Deno.test("kernel - injected transform errors propagate as cell errors", async (
   const transform = (): Promise<{ code: string }> =>
     Promise.reject(new Error("transform exploded"));
   const kernel = await createReplKernel({ transform });
-  const { result } = await evalCollect(kernel, "1");
+  const result = await evalCollect(kernel, "1");
   assertEquals(result.ok, false);
   assertStringIncludes(result.error ?? "", "transform exploded");
   await kernel.dispose();
@@ -270,7 +235,7 @@ Deno.test("kernel - injected transform errors propagate as cell errors", async (
 Deno.test("kernel - default transform backend still works", async () => {
   // Regression: no options -> process-global esbuild-wasm singleton.
   const kernel = await createReplKernel();
-  const { result } = await evalCollect(kernel, "const x: number = 1; x + 1");
+  const result = await evalCollect(kernel, "const x: number = 1; x + 1");
   assertEquals(result.ok, true);
   assertEquals(result.data, 2);
   await kernel.dispose();
@@ -301,8 +266,8 @@ Deno.test("kernel - reset clears scope and names", async () => {
   await evalCollect(kernel, "const a = 1");
   kernel.reset();
   const r = await evalCollect(kernel, "typeof a");
-  assertEquals(r.result.ok, true);
-  assertEquals(r.result.data, "undefined");
+  assertEquals(r.ok, true);
+  assertEquals(r.data, "undefined");
   await kernel.dispose();
 });
 

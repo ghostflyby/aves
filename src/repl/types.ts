@@ -3,22 +3,13 @@
 //
 // The SDK is host-neutral and owns NO child process: hosts decide
 // which process this code runs in, who spawned it, and who
-// supervises it (design doc §5.3). The kernel produces per-cell
-// console output streams and an emit port; every global install
-// (console.*, prompt/confirm, Deno.jupyter.*) is host-owned and
-// wired to those ports via the SDK utils (design doc §5.2).
+// supervises it (design doc §5.3). The kernel's only irreplaceable
+// responsibility is evaluation: persistent scope, top-level await,
+// import rewriting, and the final-expression value (ReplEvalResult).
+// Everything else — console output routing, prompt/confirm,
+// Deno.jupyter.* — is host-environment wiring the host injects
+// itself (using kernel.current to attribute output to an execution).
 // ============================================================
-
-/**
- * Console output produced during a single execution. The SDK only captures
- * what code writes to the console; richer projections (MIME execute_result,
- * display_data, clear_output, error tracebacks) are Jupyter-specific and
- * host-owned — hosts derive them from `ReplEvalResult` + `executionId` and
- * route them through their own channels.
- */
-export type ReplOutputEvent =
-  | { kind: "stdout"; text: string }
-  | { kind: "stderr"; text: string };
 
 export interface ReplEvalResult {
   ok: boolean;
@@ -37,12 +28,6 @@ export interface ReplExecution {
   /** Monotonic sequence number (Jupyter execution_count counterpart). */
   readonly executionId: number;
   /**
-   * Pull-based stream of this cell's structured output. The host consumes it
-   * with pipeTo / for await / tee; `emit()` routes additional events into the
-   * same stream while it is open.
-   */
-  readonly outputs: ReadableStream<ReplOutputEvent>;
-  /**
    * This execution's resident AbortController. `signal` is `controller.signal`,
    * so `controller` is both the handle to cancel this execution after the fact
    * and a reliable cancellation event source: every cancellation source —
@@ -52,10 +37,8 @@ export interface ReplExecution {
   readonly controller: AbortController;
   /** This execution's cancellation signal (`=== controller.signal`). */
   readonly signal: AbortSignal;
-  /** Settles when the cell's async IIFE settles (the stream closes after). */
+  /** Settles when the cell's async IIFE settles. */
   readonly result: Promise<ReplEvalResult>;
-  /** Route an output event into this execution's stream. */
-  emit(event: ReplOutputEvent): void | Promise<void>;
 }
 
 export interface ReplSnapshot {
@@ -91,9 +74,10 @@ export interface ReplKernel extends AsyncDisposable {
    */
   execute(code: string, options?: { signal?: AbortSignal }): ReplExecution;
   /**
-   * The in-flight execution, or `null` when idle. References the execution
-   * object that was running when the queue advanced, so it never points at a
-   * newly queued execution.
+   * The in-flight execution, or `null` when idle. Hosts use this to attribute
+   * their own injected globals (console.*, Deno.jupyter.*) to the running
+   * cell. References the execution object that was running when the queue
+   * advanced, so it never points at a newly queued execution.
    */
   readonly current: ReplExecution | null;
   /** Abort the in-flight execution (`=== current?.controller.abort()`). */
