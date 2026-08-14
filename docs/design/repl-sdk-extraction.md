@@ -236,9 +236,24 @@ export interface ReplKernel {
   snapshot(): ReplSnapshot;
   /** Clear scope + declared names (restart without process respawn). */
   reset(): void;
+  /**
+   * Release the kernel: abort in-flight work, reject queued executions, and
+   * free the engine. Same as `[Symbol.asyncDispose]()`, so
+   * `await using kernel = await createReplKernel()` cleans up automatically
+   * when the block exits.
+   */
   dispose(): Promise<void>;
+  /** Explicit resource management protocol (identical to `dispose()`). */
+  [Symbol.asyncDispose](): Promise<void>;
 }
 ```
+
+`ReplKernel` implements `AsyncDisposable`: `dispose()` and
+`[Symbol.asyncDispose]` are the same release path, so both explicit
+`await kernel.dispose()` and `await using kernel = await createReplKernel()`
+work. The install utils likewise return a `Restore` type — callable and
+`Disposable` (`using _ = installConsoleCapture(...)` restores on block
+exit).
 
 The kernel takes **one option** — an injectable cell transformer — and is
 otherwise a pure evaluator plus per-execution output streams:

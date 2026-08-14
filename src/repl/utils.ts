@@ -18,6 +18,19 @@ export type InputFn = (
   options?: { password?: boolean },
 ) => Promise<string>;
 
+/**
+ * Undo function returned by the install helpers. Callable directly and also
+ * `Disposable`, so `using _ = installConsoleCapture(...)` restores the globals
+ * when the block exits.
+ */
+export type Restore = (() => void) & Disposable;
+
+function asRestore(fn: () => void): Restore {
+  const restore = fn as Restore;
+  restore[Symbol.dispose] = fn;
+  return restore;
+}
+
 const CONSOLE_KINDS: Array<[keyof Console, "stdout" | "stderr"]> = [
   ["log", "stdout"],
   ["info", "stdout"],
@@ -28,11 +41,11 @@ const CONSOLE_KINDS: Array<[keyof Console, "stdout" | "stderr"]> = [
 
 /**
  * Replace console.log/info/debug/warn/error so output lands in `emit`
- * (e.g. a ReplExecution.emit). Returns a restore function.
+ * (e.g. a ReplExecution.emit). Returns a Restore that undoes the install.
  */
 export function installConsoleCapture(
   emit: (event: ReplOutputEvent) => void,
-): () => void {
+): Restore {
   const originals = new Map<keyof Console, (...args: unknown[]) => void>();
   for (const [method, kind] of CONSOLE_KINDS) {
     const original = console[method];
@@ -43,11 +56,11 @@ export function installConsoleCapture(
     };
     console[method] = wrapper as typeof console.log;
   }
-  return () => {
+  return asRestore(() => {
     for (const [method, original] of originals) {
       (console as Record<keyof Console, unknown>)[method] = original;
     }
-  };
+  });
 }
 
 function formatConsoleArg(value: unknown): string {
@@ -62,9 +75,9 @@ function formatConsoleArg(value: unknown): string {
 /**
  * Bind globalThis.prompt/confirm to an async input channel. The bound
  * functions return promises (the channel is asynchronous), so cell code uses
- * `await prompt(...)`. Returns a restore function.
+ * `await prompt(...)`. Returns a Restore that undoes the install.
  */
-export function installPromptInput(input: InputFn): () => void {
+export function installPromptInput(input: InputFn): Restore {
   const g = globalThis as Record<string, unknown>;
   const hadPrompt = Object.prototype.hasOwnProperty.call(g, "prompt");
   const hadConfirm = Object.prototype.hasOwnProperty.call(g, "confirm");
@@ -78,10 +91,10 @@ export function installPromptInput(input: InputFn): () => void {
       answer !== "false";
   };
 
-  return () => {
+  return asRestore(() => {
     if (hadPrompt) g.prompt = prevPrompt;
     else delete g.prompt;
     if (hadConfirm) g.confirm = prevConfirm;
     else delete g.confirm;
-  };
+  });
 }

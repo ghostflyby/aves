@@ -84,3 +84,13 @@ Deno.test("utils - prompt input restore removes globals", () => {
   restore();
   assertEquals(g.prompt, before);
 });
+
+Deno.test("utils - using restore undoes the install on block exit", () => {
+  const g = globalThis as Record<string, unknown>;
+  const before = g.prompt;
+  {
+    using _ = installPromptInput(() => Promise.resolve(""));
+    assertEquals(typeof g.prompt, "function");
+  }
+  assertEquals(g.prompt, before);
+});

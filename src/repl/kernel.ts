@@ -213,18 +213,26 @@ export function createReplKernel(
     },
 
     dispose() {
-      if (disposed) return Promise.resolve();
-      disposed = true;
-      currentExecution?.controller.abort();
-      const pending = queue.splice(0);
-      for (const item of pending) {
-        item.resolveResult({ ok: false, error: "kernel disposed" });
-        item.sink.close();
-      }
-      engine.dispose();
-      return Promise.resolve();
+      return release();
+    },
+
+    [Symbol.asyncDispose]() {
+      return release();
     },
   };
+
+  function release(): Promise<void> {
+    if (disposed) return Promise.resolve();
+    disposed = true;
+    currentExecution?.controller.abort();
+    const pending = queue.splice(0);
+    for (const item of pending) {
+      item.resolveResult({ ok: false, error: "kernel disposed" });
+      item.sink.close();
+    }
+    engine.dispose();
+    return Promise.resolve();
+  }
 
   return Promise.resolve(kernel);
 }

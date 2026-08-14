@@ -89,7 +89,7 @@ export interface ReplKernelOptions {
   transform?: CodeTransform;
 }
 
-export interface ReplKernel {
+export interface ReplKernel extends AsyncDisposable {
   /**
    * Queue and run one cell. Returns immediately; executions run serially
    * (FIFO) because they share the persistent scope. Top-level await is
@@ -108,5 +108,13 @@ export interface ReplKernel {
   snapshot(): ReplSnapshot;
   /** Clear scope + declared names (restart without process respawn). */
   reset(): void;
+  /**
+   * Release the kernel: abort in-flight work, reject queued executions, and
+   * free the engine. Same as `[Symbol.asyncDispose]()`, so
+   * `await using kernel = await createReplKernel()` cleans up automatically
+   * when the block exits.
+   */
   dispose(): Promise<void>;
+  /** Explicit resource management protocol (identical to `dispose()`). */
+  [Symbol.asyncDispose](): Promise<void>;
 }

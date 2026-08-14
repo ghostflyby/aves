@@ -315,3 +315,15 @@ Deno.test("kernel - dispose rejects pending and future executions", async () => 
   const after = kernel.execute("1");
   assertEquals((await after.result).ok, false);
 });
+
+Deno.test("kernel - await using disposes the kernel on block exit", async () => {
+  const ex = (async () => {
+    await using kernel = await createReplKernel();
+    await evalCollect(kernel, "const x = 1");
+    return kernel;
+  })();
+  const kernel = await ex;
+  // After the block, the kernel is disposed: new executions fail.
+  const after = kernel.execute("1");
+  assertEquals((await after.result).ok, false);
+});
