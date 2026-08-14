@@ -116,9 +116,6 @@ src/repl/                         <- the SDK (host-neutral; owns NO child proces
     kernel.ts                       createReplKernel(options): in-process evaluation
                                     kernel; owns NO child process; produces no
                                     output events (final-expression value only)
-    utils.ts                        host-side global installs (console capture,
-                                    prompt/confirm -> sink / input channel);
-                                    library functions, not kernel options
     jupyter/                        optional host-owned shim + MIME helpers
                                     (design: host wires Deno.jupyter.* itself)
 
@@ -228,8 +225,7 @@ export interface ReplKernel {
 `ReplKernel` implements `AsyncDisposable`: `dispose()` and
 `[Symbol.asyncDispose]` are the same release path, so both explicit
 `await kernel.dispose()` and `await using kernel = await createReplKernel()`
-work. The install utils likewise return a `Restore` type — callable and
-`Disposable` (`using _ = installPromptInput(...)` restores on block exit).
+work.
 
 The kernel takes **one option** — an injectable cell transformer — and is
 otherwise a pure evaluator plus a resident-cancellation handle per execution:
@@ -273,12 +269,10 @@ const kernel = await createReplKernel({
 
 The SDK produces **no output events** — its only result is `ReplEvalResult` (the
 final-expression value is the one thing a host cannot capture itself). Every
-global install (console._, prompt/confirm, `Deno.jupyter.*`) is host-owned;
+global install (console._, prompt/confirm, `Deno.jupyter.*`) is host-owned:
 hosts attribute their own console capture to the in-flight cell via
-`kernel.current` and route through their own channels. `src/repl/utils.ts`
-provides the shared wiring helpers (`installConsoleCapture` for console._
-capture — the five standard methods plus assert/trace; `installPromptInput` for
-prompt/confirm) as library functions — **not** kernel options:
+`kernel.current` and route through their own channels. The SDK ships **no
+global-install helpers** — hosts wire their environment however they like.
 
 ### 5.3 Lifecycle ownership: process boundary = host boundary
 
@@ -327,7 +321,7 @@ binds its own transport (control channel, socket, ...) to the kernel:
 
 ```ts
 // custom-host child entry (e.g. Maieutics' injected bootstrap)
-import { createReplKernel, installPromptInput } from "@ghostflyby/aves/repl";
+import { createReplKernel } from "@ghostflyby/aves/repl";
 
 const kernel = await createReplKernel(); // no options; installs no globals
 
@@ -347,7 +341,7 @@ const routeConsole = (kind: "stdout" | "stderr") => (...args: unknown[]) => {
 globalThis.console.log = routeConsole("stdout");
 globalThis.console.error = routeConsole("stderr");
 // prompt/confirm via the host's own async input channel, e.g.:
-//   installPromptInput((p) => controlChannel.inputRequest(p))
+//   globalThis.prompt = (m) => channel.inputRequest(String(m ?? ""));
 
 channel.on("execute", ({ code, msgId, timeoutMs }) => {
   const ex = kernel.execute(code, { signal: AbortSignal.timeout(timeoutMs) });
@@ -507,9 +501,8 @@ entirely a host decision.
 
 - `transform.ts` moved as-is; `types.ts` (`ReplExecution`, `ReplKernel`,
   `ReplSnapshot`, `ReplKernelOptions`), `eval-engine.ts` (`EvalEngine`),
-  `kernel.ts` (`createReplKernel`), `utils.ts` (`installConsoleCapture`,
-  `installPromptInput`), `mod.ts` (SDK surface) added. The SDK imports only
-  `node:` built-ins, `acorn`, `astring`, and `esbuild-wasm`.
+  `kernel.ts` (`createReplKernel`), `mod.ts` (SDK surface) added. The SDK
+  imports only `node:` built-ins, `acorn`, `astring`, and `esbuild-wasm`.
 - `src/host/child-session.ts` + `manager.ts` + `policy.ts` + `transport.ts` +
   `boot.ts` own Aves' spawn/supervision, default BrokerPolicy, and its stdio
   transport; `mcp/server.ts`, `mcp/resources.ts`, `main.ts`, `transform_test.ts`
@@ -569,10 +562,9 @@ The SDK was redesigned pre-1.0 around host neutrality and minimal surface:
 - **`createReplKernel` is synchronous** (returns `Promise<ReplKernel>` for
   future async setup, but the wasm init is lazy on first execute); the kernel
   itself owns no child process.
-- **`prompt()`/`confirm()` are async**: `installPromptInput` binds them to the
-  host's async input channel (e.g. a Jupyter `input_request` round-trip), so
-  cell code must `await prompt(...)`. The kernel itself never touches these
-  globals.
+- **`prompt()`/`confirm()` are async**: hosts that bind them (e.g. to a Jupyter
+  `input_request` round-trip) must make them return Promises, so cell code uses
+  `await prompt(...)`. The kernel itself never touches these globals.
 
 ### Phase 3 — Jupyter-compat shim (host-owned)
 
@@ -628,21 +620,19 @@ The SDK was redesigned pre-1.0 around host neutrality and minimal surface:
 - Should the SDK ship as a separate export (`@ghostflyby/aves/repl`) or stay a
   re-export of `@ghostflyby/aves`? Separate export is implemented — notebook
   hosts import `@ghostflyby/aves/repl` and never pull MCP/db modules.
-- Whether the SDK should also ship a `ReplKernelOptions` (currently empty) for
-  future flags, or `createReplKernel()` stays argument-free (kept the signature
-  open pre-1.0).
-- Backpressure granularity: the per-execution output stream enforces its
-  high-water mark; whether a host needs kernel-level flow control across queued
-  executions (defer).
-- Whether `installPromptInput` should also bind `confirm` (it does) and whether
-  Phase 3's `Deno.jupyter` wiring helper should be a separate `utils` export
-  (leaning yes).
+- Whether the SDK should also ship host-side global-install helpers
+  (`installConsoleCapture` / `installPromptInput`) in a later version — the
+  kernel itself stays argument-free and installs no globals.
+- Whether the kernel needs kernel-level flow control across queued executions
+  (the SDK currently has none — cells are serialized FIFO and results settle
+  once the cell's async IIFE does; defer).
 
 ## 11. Verification
 
 - `deno check src/ main.ts mcp_e2e_test.ts`
 - `deno lint .` and `deno fmt --check .`
-- `deno test ... src/repl/` (34 transform + 17 kernel + 7 transport + 6 utils)
+- `deno test ... src/repl/` (transform + kernel tests)
+- `deno test ... src/host/` (StdioTransport framing)
 - `deno test ... mcp_e2e_test.ts` (MCP surface regression)
 - A manual `repl_create` / `repl_eval` / `repl_close` round-trip through the MCP
   stdio server (existing e2e covers this)
