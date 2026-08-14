@@ -72,6 +72,23 @@ export interface ReplSnapshot {
   readonly values: Record<string, unknown>;
 }
 
+/** Cell transformer: esbuild-compatible contract (TS/JS code in, ESM out). */
+export type CodeTransform = (
+  code: string,
+  options: { loader: "ts"; format: "esm" },
+) => Promise<{ code: string }>;
+
+export interface ReplKernelOptions {
+  /**
+   * Replace the default esbuild-wasm transform. Hosts can supply a shared
+   * instance, a worker-pool-backed transform (one esbuild-wasm isolate per
+   * worker, message-forwarded), a pre-bundled wasm payload, or a test stub.
+   * Default: the process-global esbuild-wasm singleton (initialized once per
+   * process, shared by all kernels).
+   */
+  transform?: CodeTransform;
+}
+
 export interface ReplKernel {
   /**
    * Queue and run one cell. Returns immediately; executions run serially

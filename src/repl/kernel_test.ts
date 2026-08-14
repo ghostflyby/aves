@@ -225,6 +225,57 @@ Deno.test("kernel - pre-aborted signal skips the execution", async () => {
   await kernel.dispose();
 });
 
+Deno.test("kernel - injected transform is used and receives loader/format", async () => {
+  let called = 0;
+  const transform = (
+    code: string,
+    options: { loader: "ts"; format: "esm" },
+  ) => {
+    called++;
+    assertEquals(options.loader, "ts");
+    assertEquals(options.format, "esm");
+    return Promise.resolve({ code }); // passthrough; the transformer runs it directly below
+  };
+  const kernel = await createReplKernel({ transform });
+  const { result } = await evalCollect(kernel, "1 + 1");
+  assertEquals(result.ok, true);
+  assertEquals(result.data, 2);
+  assertEquals(called, 1);
+  await kernel.dispose();
+});
+
+Deno.test("kernel - custom transform still runs through the AST pipeline", async () => {
+  // A hand-written passthrough transform (no esbuild-wasm dependency):
+  // transform.ts still rewrites declarations into the persistent scope.
+  const transform = (code: string) => Promise.resolve({ code });
+  const kernel = await createReplKernel({ transform });
+  const r1 = await evalCollect(kernel, "const deep = 1");
+  assertEquals(r1.result.ok, true);
+  const r2 = await evalCollect(kernel, "deep + 1");
+  assertEquals(r2.result.ok, true);
+  assertEquals(r2.result.data, 2);
+  await kernel.dispose();
+});
+
+Deno.test("kernel - injected transform errors propagate as cell errors", async () => {
+  const transform = (): Promise<{ code: string }> =>
+    Promise.reject(new Error("transform exploded"));
+  const kernel = await createReplKernel({ transform });
+  const { result } = await evalCollect(kernel, "1");
+  assertEquals(result.ok, false);
+  assertStringIncludes(result.error ?? "", "transform exploded");
+  await kernel.dispose();
+});
+
+Deno.test("kernel - default transform backend still works", async () => {
+  // Regression: no options -> process-global esbuild-wasm singleton.
+  const kernel = await createReplKernel();
+  const { result } = await evalCollect(kernel, "const x: number = 1; x + 1");
+  assertEquals(result.ok, true);
+  assertEquals(result.data, 2);
+  await kernel.dispose();
+});
+
 Deno.test("kernel - executionId increments monotonically", async () => {
   const kernel = await createReplKernel();
   const a = kernel.execute("1");

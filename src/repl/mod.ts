@@ -11,10 +11,12 @@
 // ============================================================
 
 export type {
+  CodeTransform,
   MimeBundle,
   ReplEvalResult,
   ReplExecution,
   ReplKernel,
+  ReplKernelOptions,
   ReplOutputEvent,
   ReplSnapshot,
 } from "./types.ts";

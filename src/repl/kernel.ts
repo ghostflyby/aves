@@ -15,6 +15,7 @@ import type {
   ReplEvalResult,
   ReplExecution,
   ReplKernel,
+  ReplKernelOptions,
   ReplOutputEvent,
 } from "./types.ts";
 
@@ -26,15 +27,14 @@ const OUTPUT_HIGH_WATER_MARK = 64;
 
 class ExecutionOutput {
   readonly stream: ReadableStream<ReplOutputEvent>;
-  private controller: ReadableStreamDefaultController<ReplOutputEvent> | null =
-    null;
+  #controller: ReadableStreamDefaultController<ReplOutputEvent> | null = null;
   private closed = false;
   private waiters: Array<() => void> = [];
 
   constructor() {
     this.stream = new ReadableStream<ReplOutputEvent>({
       start: (controller) => {
-        this.controller = controller;
+        this.#controller = controller;
       },
       pull: () => this.resolveWaiters(),
       cancel: () => {
@@ -52,13 +52,13 @@ class ExecutionOutput {
   emit(event: ReplOutputEvent): void | Promise<void> {
     if (this.closed) return;
     try {
-      this.controller!.enqueue(event);
+      this.#controller!.enqueue(event);
     } catch {
       this.closed = true;
       this.resolveWaiters();
       return;
     }
-    if ((this.controller!.desiredSize ?? 0) < 0) {
+    if ((this.#controller!.desiredSize ?? 0) < 0) {
       return new Promise<void>((resolve) => this.waiters.push(resolve));
     }
   }
@@ -68,13 +68,13 @@ class ExecutionOutput {
     this.closed = true;
     this.resolveWaiters();
     try {
-      this.controller!.close();
+      this.#controller!.close();
     } catch { /* already closed */ }
   }
 
   private resolveWaiters(): void {
     if (this.waiters.length === 0) return;
-    if (this.closed || (this.controller!.desiredSize ?? 0) > 0) {
+    if (this.closed || (this.#controller!.desiredSize ?? 0) > 0) {
       const ws = this.waiters;
       this.waiters = [];
       for (const resolve of ws) resolve();
@@ -90,8 +90,10 @@ interface QueueItem {
   execution: ReplExecution;
 }
 
-export function createReplKernel(): Promise<ReplKernel> {
-  const engine = new EvalEngine();
+export function createReplKernel(
+  options?: ReplKernelOptions,
+): Promise<ReplKernel> {
+  const engine = new EvalEngine({ transform: options?.transform });
   const queue: QueueItem[] = [];
   let running = false;
   let currentExecution: ReplExecution | null = null;

@@ -11,18 +11,14 @@
 
 import esbuildWasmCjs from "esbuild-wasm/lib/browser.js";
 import { transform } from "./transform.ts";
-
-type TransformFn = (
-  code: string,
-  options: { loader: string; format: string },
-) => Promise<{ code: string }>;
+import type { CodeTransform } from "./types.ts";
 
 const esbuildWasm = esbuildWasmCjs as unknown as {
   initialize(options: {
     wasmModule: WebAssembly.Module;
     worker: boolean;
   }): Promise<void>;
-  transform: TransformFn;
+  transform: CodeTransform;
 };
 
 /**
@@ -36,9 +32,9 @@ const esbuildWasm = esbuildWasmCjs as unknown as {
  * transform is memoised at module scope — all engines in a process share the
  * single WASM service.
  */
-let transformPromise: Promise<TransformFn> | null = null;
+let transformPromise: Promise<CodeTransform> | null = null;
 
-function getTransform(): Promise<TransformFn> {
+function getTransform(): Promise<CodeTransform> {
   if (!transformPromise) {
     transformPromise = (async () => {
       const entryUrl = import.meta.resolve("esbuild-wasm/lib/browser.js");
@@ -59,7 +55,16 @@ function getTransform(): Promise<TransformFn> {
 export class EvalEngine {
   readonly scope: Record<string, unknown> = {};
   readonly declaredNames: Set<string> = new Set();
-  private disposed = false;
+  #disposed = false;
+  #transform: CodeTransform | null;
+
+  /**
+   * @param transform An injected cell transformer. Defaults to the
+   *   process-global esbuild-wasm singleton (see getTransform).
+   */
+  constructor(options?: { transform?: CodeTransform }) {
+    this.#transform = options?.transform ?? null;
+  }
 
   /**
    * Transform + evaluate one cell in the persistent scope. Rejects on
@@ -69,9 +74,9 @@ export class EvalEngine {
     code: string,
     options?: { signal?: AbortSignal },
   ): Promise<unknown> {
-    if (this.disposed) throw new Error("REPL engine disposed");
+    if (this.#disposed) throw new Error("REPL engine disposed");
     if (options?.signal?.aborted) throw abortError(options.signal);
-    const t = await getTransform();
+    const t = this.#transform ?? await getTransform();
     const esm = await t(code, { loader: "ts", format: "esm" });
     const wrapped = transform(esm.code, this.declaredNames);
     const AF = Object.getPrototypeOf(async function () {}).constructor as new (
@@ -98,7 +103,7 @@ export class EvalEngine {
   }
 
   dispose(): void {
-    this.disposed = true;
+    this.#disposed = true;
   }
 }
 

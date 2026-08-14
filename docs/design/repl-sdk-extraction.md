@@ -240,11 +240,50 @@ export interface ReplKernel {
 }
 ```
 
-The kernel takes **no options**: it is a pure evaluator plus per-execution
-output streams. Every global install (console.*, prompt/confirm,
-`Deno.jupyter.*`) is host-owned and wired to `ReplExecution.emit` / the host's
-own input channel via the SDK utils (`src/repl/utils.ts`), which are library
-functions — **not** kernel options:
+The kernel takes **one option** — an injectable cell transformer — and is
+otherwise a pure evaluator plus per-execution output streams:
+
+```ts
+/** Cell transformer: esbuild-compatible contract (TS/JS code in, ESM out). */
+export type CodeTransform = (
+  code: string,
+  options: { loader: "ts"; format: "esm" },
+) => Promise<{ code: string }>;
+
+export interface ReplKernelOptions {
+  /**
+   * Replace the default esbuild-wasm transform. Hosts can supply a shared
+   * instance, a worker-pool-backed transform (one esbuild-wasm isolate per
+   * worker, message-forwarded), a pre-bundled wasm payload, or a test stub.
+   * Default: the process-global esbuild-wasm singleton (initialized once per
+   * process, shared by all kernels).
+   */
+  transform?: CodeTransform;
+}
+```
+
+Why `transform` is a kernel option while console/prompt/`Deno.jupyter` are not:
+the transform is **executed by the kernel on every cell** (it is the SDK's only
+third-party dependency), whereas the globals are host-environment concerns the
+kernel never touches. A host that wants to amortize wasm initialization across
+REPLs in separate workers keeps the pool on its own side — the SDK only sees a
+function:
+
+```ts
+// host-side worker-pool transform (sketch): one esbuild-wasm isolate per
+// worker, message-forwarded; the pool's lifecycle is host-owned.
+function pooledTransform(pool: WorkerPool): CodeTransform {
+  return (code, options) => pool.post({ type: "transform", code, options });
+}
+const kernel = await createReplKernel({
+  transform: pooledTransform(myWorkerPool),
+});
+```
+
+Every global install (console.*, prompt/confirm, `Deno.jupyter.*`) is host-owned
+and wired to `ReplExecution.emit` / the host's own input channel via the SDK
+utils (`src/repl/utils.ts`), which are library functions — **not** kernel
+options:
 
 ```ts
 // utils.ts — host-side installs; return restore functions
