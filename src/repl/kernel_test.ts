@@ -91,18 +91,18 @@ Deno.test("kernel - class declaration persists across evals", async () => {
   await kernel.dispose();
 });
 
-Deno.test("kernel - emit routes events into the execution stream", async () => {
+Deno.test("kernel - emit routes console events into the execution stream", async () => {
   const kernel = await createReplKernel();
   const ex = kernel.execute("await new Promise(r => setTimeout(r, 20)); 1");
   ex.emit({ kind: "stdout", text: "hello" });
-  ex.emit({ kind: "display", data: { "text/html": "<b>x</b>" }, metadata: {} });
+  ex.emit({ kind: "stderr", text: "oops" });
   const result = await ex.result;
   const events = await collect(ex);
   assertEquals(result.ok, true);
   assertEquals(result.data, 1);
   assertEquals(events, [
     { kind: "stdout", text: "hello" },
-    { kind: "display", data: { "text/html": "<b>x</b>" }, metadata: {} },
+    { kind: "stderr", text: "oops" },
   ]);
   await kernel.dispose();
 });

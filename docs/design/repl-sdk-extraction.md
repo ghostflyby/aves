@@ -159,20 +159,10 @@ The SDK must import only: `node:` built-ins, `acorn`, `astring`, and
 ```ts
 // types.ts
 
-/** Structured output produced during a single execution. */
+/** Console output produced during a single execution. */
 export type ReplOutputEvent =
   | { kind: "stdout"; text: string }
-  | { kind: "stderr"; text: string }
-  | {
-    kind: "display";
-    data: MimeBundle;
-    metadata: Record<string, unknown>;
-    displayId?: string;
-    update?: boolean;
-  }
-  | { kind: "clear"; wait: boolean }
-  | { kind: "execute_result"; data: MimeBundle; executionCount: number }
-  | { kind: "error"; name: string; value: string; traceback: string[] };
+  | { kind: "stderr"; text: string };
 
 export interface ReplEvalResult {
   ok: boolean;
@@ -311,9 +301,12 @@ export type InputFn = (
 export function installPromptInput(input: InputFn): () => void;
 ```
 
-`MimeBundle` is the plain `Record<string, string | Uint8Array>` shape already
-used by Aves' `Deno.jupyter`-style display (structured until the host projects
-it to a wire format).
+The SDK deliberately exposes **only console events** (`stdout`/`stderr`).
+Jupyter projections — MIME `execute_result` / `display_data` / `clear_output`
+(displayId, update, traceback, executionCount) — are notebook-wire concepts that
+hosts derive from `ReplEvalResult` + `executionId` and route through their own
+channels; the MIME bundle shape is host-owned (Phase 3 provides optional
+formatting helpers).
 
 ### 5.3 Lifecycle ownership: process boundary = host boundary
 
@@ -598,12 +591,13 @@ The SDK was redesigned pre-1.0 around Deno Web APIs and host neutrality:
 ### Phase 3 — Jupyter-compat shim (host-owned)
 
 - `Deno.jupyter` namespace (`display`, `html`/`md`/`svg`/`image`, `format`,
-  `$display`) is host-owned: hosts wire it to `ReplExecution.emit` (display) and
-  their own input channel (input). The SDK may provide MIME formatting helpers
-  (extracted so notebook hosts share them) plus the wiring skeleton; it never
-  installs the namespace itself. `Deno.jupyter.input` is host territory just
-  like `prompt`. Out of scope for the MCP server; unit-tested against a fake
-  execution.
+  `$display`) is host-owned: the SDK emits only console events, so hosts that
+  want `Deno.jupyter.display` to project MIME bundles need their own
+  per-execution display channel (they can multiplex it through `emit` or their
+  own stream/transport). The SDK may provide MIME formatting helpers (extracted
+  so notebook hosts share them) plus the wiring skeleton; it never installs the
+  namespace itself. `Deno.jupyter.input` is host territory just like `prompt`.
+  Out of scope for the MCP server; unit-tested against a fake execution.
 
 ### Phase 4 — example custom entry + docs
 

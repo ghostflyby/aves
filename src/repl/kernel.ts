@@ -3,11 +3,11 @@
 //
 // In-process evaluation kernel. Executions run serially (FIFO) on
 // a shared persistent scope; each execution exposes a pull-based
-// output stream plus an `emit` port for host-routed events (console
-// capture, Deno.jupyter.display, ...) and a resident AbortController
-// as its cancellation handle + event source. The kernel owns NO
-// child process and installs NO globals — hosts decide the process,
-// the supervision, and any global wiring (design doc §5.3).
+// console-output stream plus an `emit` port for host-routed console
+// capture, and a resident AbortController as its cancellation
+// handle + event source. The kernel owns NO child process and
+// installs NO globals — hosts decide the process, the supervision,
+// and any global wiring (design doc §5.3).
 // ============================================================
 
 import { EvalEngine } from "./eval-engine.ts";

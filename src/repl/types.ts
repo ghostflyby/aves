@@ -4,28 +4,21 @@
 // The SDK is host-neutral and owns NO child process: hosts decide
 // which process this code runs in, who spawned it, and who
 // supervises it (design doc §5.3). The kernel produces per-cell
-// output streams and an emit port; every global install
+// console output streams and an emit port; every global install
 // (console.*, prompt/confirm, Deno.jupyter.*) is host-owned and
 // wired to those ports via the SDK utils (design doc §5.2).
 // ============================================================
 
-/** Plain MIME bundle shape used for display / execute_result payloads. */
-export type MimeBundle = Record<string, string | Uint8Array>;
-
-/** Structured output produced during a single execution. */
+/**
+ * Console output produced during a single execution. The SDK only captures
+ * what code writes to the console; richer projections (MIME execute_result,
+ * display_data, clear_output, error tracebacks) are Jupyter-specific and
+ * host-owned — hosts derive them from `ReplEvalResult` + `executionId` and
+ * route them through their own channels.
+ */
 export type ReplOutputEvent =
   | { kind: "stdout"; text: string }
-  | { kind: "stderr"; text: string }
-  | {
-    kind: "display";
-    data: MimeBundle;
-    metadata: Record<string, unknown>;
-    displayId?: string;
-    update?: boolean;
-  }
-  | { kind: "clear"; wait: boolean }
-  | { kind: "execute_result"; data: MimeBundle; executionCount: number }
-  | { kind: "error"; name: string; value: string; traceback: string[] };
+  | { kind: "stderr"; text: string };
 
 export interface ReplEvalResult {
   ok: boolean;

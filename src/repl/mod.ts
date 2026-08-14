@@ -12,7 +12,6 @@
 
 export type {
   CodeTransform,
-  MimeBundle,
   ReplEvalResult,
   ReplExecution,
   ReplKernel,
