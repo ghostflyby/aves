@@ -116,16 +116,9 @@ src/repl/                         <- the SDK (host-neutral; owns NO child proces
     kernel.ts                       createReplKernel(options): in-process evaluation
                                     kernel; owns NO child process; produces no
                                     output events (final-expression value only)
-    transport.ts                    StdioTransport: newline-JSON protocol codec
-                                    bound to a ReplKernel (pure I/O; does NOT
-                                    spawn or supervise)
-    utils.ts                        host-side global install (prompt/confirm ->
-                                    input channel); library function, not a
-                                    kernel option
-    boot.ts                         default child entry: createReplKernel +
-                                    StdioTransport over stdin/stdout (reference
-                                    assembly; external hosts write their own entry
-                                    bound to their own transport)
+    utils.ts                        host-side global installs (console capture,
+                                    prompt/confirm -> sink / input channel);
+                                    library functions, not kernel options
     jupyter/                        optional host-owned shim + MIME helpers
                                     (design: host wires Deno.jupyter.* itself)
 
@@ -136,6 +129,13 @@ src/host/                         <- host-side assembly (Aves as one host)
     manager.ts                      ReplManager (registry; unchanged semantics)
     policy.ts                       Aves' default BrokerPolicy decision chain
                                     (moved from runner.ts; host-owned, see §5.5)
+    transport.ts                    StdioTransport: newline-JSON protocol codec
+                                    bound to a ReplKernel (pure I/O; does NOT
+                                    spawn or supervise). Aves' transport —
+                                    external hosts write their own
+    boot.ts                         Aves' stdio child entry: createReplKernel +
+                                    StdioTransport over stdin/stdout (wire
+                                    protocol unchanged)
 
 src/broker.ts                     stays (protocol + injectable policy; the broker
                                   server is started by the process that owns the
@@ -273,11 +273,12 @@ const kernel = await createReplKernel({
 
 The SDK produces **no output events** — its only result is `ReplEvalResult` (the
 final-expression value is the one thing a host cannot capture itself). Every
-global install (console.*, prompt/confirm, `Deno.jupyter.*`) is host-owned;
+global install (console._, prompt/confirm, `Deno.jupyter.*`) is host-owned;
 hosts attribute their own console capture to the in-flight cell via
 `kernel.current` and route through their own channels. `src/repl/utils.ts`
-provides the shared wiring helper as a library function — **not** a kernel
-option:
+provides the shared wiring helpers (`installConsoleCapture` for console._
+capture — the five standard methods plus assert/trace; `installPromptInput` for
+prompt/confirm) as library functions — **not** kernel options:
 
 ### 5.3 Lifecycle ownership: process boundary = host boundary
 
@@ -289,8 +290,9 @@ process.** The SDK is deliberately process-agnostic:
   path, startup/execution/shutdown timeouts, SIGINT→SIGKILL escalation, restart,
   PID registration, and process-tree cleanup on host exit.
 - **SDK-owned**: everything inside the child — scope persistence, top-level
-  await, import rewriting, the final-expression result, cooperative interrupt,
-  and the stdio JSON protocol codec.
+  await, import rewriting, the final-expression result, and cooperative
+  interrupt. The stdio JSON protocol codec (StdioTransport + boot.ts) is Aves'
+  host transport and lives in `src/host/`.
 
 Rationale:
 
@@ -367,16 +369,21 @@ stdin/stdout is the channel. Pure I/O: it parses `eval` / `result` / `close` /
 `closed` / `timeout_ms` lines and drives `kernel.execute`, but never spawns:
 
 ```ts
-// boot.ts default mode (unchanged wire protocol)
+// src/host/boot.ts — Aves' stdio child entry (wire protocol unchanged)
+import { createReplKernel } from "../repl/kernel.ts";
+import { StdioTransport } from "./transport.ts";
 const kernel = await createReplKernel();
 StdioTransport.attach(kernel, Deno.stdin, Deno.stdout);
 ```
 
-`src/host/child-session.ts` is Aves' assembly that spawns `deno run boot.ts`
-with broker + env + cwd, attaches `StdioTransport`, and owns the supervision
-state machine. Aves' `repl_create/eval/close` MCP tools keep their exact
-behavior (the wire protocol is unchanged; `timeout_ms` maps to an
-`AbortSignal.timeout`).
+`src/host/child-session.ts` is Aves' assembly that spawns
+`deno run
+src/host/boot.ts` with broker + env + cwd, attaches `StdioTransport`,
+and owns the supervision state machine. Aves' `repl_create/eval/close` MCP tools
+keep their exact behavior (the wire protocol is unchanged; `timeout_ms` maps to
+an `AbortSignal.timeout`). The transport lives in the host layer because it is
+Aves' transport — notebook hosts write their own channel transport over the same
+kernel.
 
 ### 5.5 Permission decoupling
 
@@ -500,13 +507,13 @@ entirely a host decision.
 
 - `transform.ts` moved as-is; `types.ts` (`ReplExecution`, `ReplKernel`,
   `ReplSnapshot`, `ReplKernelOptions`), `eval-engine.ts` (`EvalEngine`),
-  `kernel.ts` (`createReplKernel`), `transport.ts` (`StdioTransport`),
-  `utils.ts` (`installPromptInput`), `mod.ts` (SDK surface) added. The SDK
-  imports only `node:` built-ins, `acorn`, `astring`, and `esbuild-wasm`.
-- `src/host/child-session.ts` + `manager.ts` + `policy.ts` own Aves'
-  spawn/supervision and its default BrokerPolicy; `mcp/server.ts`,
-  `mcp/resources.ts`, `main.ts`, `transform_test.ts` updated;
-  `src/repl/session.ts`/`manager.ts`/`repl-boot.ts` deleted.
+  `kernel.ts` (`createReplKernel`), `utils.ts` (`installConsoleCapture`,
+  `installPromptInput`), `mod.ts` (SDK surface) added. The SDK imports only
+  `node:` built-ins, `acorn`, `astring`, and `esbuild-wasm`.
+- `src/host/child-session.ts` + `manager.ts` + `policy.ts` + `transport.ts` +
+  `boot.ts` own Aves' spawn/supervision, default BrokerPolicy, and its stdio
+  transport; `mcp/server.ts`, `mcp/resources.ts`, `main.ts`, `transform_test.ts`
+  updated; `src/repl/session.ts`/`manager.ts`/ `repl-boot.ts` deleted.
 - `src/runner.ts` policy logic moved to `src/host/policy.ts`; runner re-exports
   and passes the skill permission module as the policy's `MidDecideHook`.
 - `src/repl/mod.ts` and `src/mod.ts` export the SDK + host assemblies.

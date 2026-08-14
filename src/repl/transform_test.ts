@@ -205,7 +205,7 @@ Deno.test("rewriteRef - computed member property is rewritten", () => {
 // Tests focus on child-process protocol and state behavior.
 // ============================================================
 
-const BOOT_PATH = new URL("./boot.ts", import.meta.url).pathname;
+const BOOT_PATH = new URL("../host/boot.ts", import.meta.url).pathname;
 const PROJECT_DIR = new URL("..", import.meta.url).pathname;
 // esbuild-wasm reads its esbuild.wasm payload from the package directory at
 // first transform; grant the child that one read explicitly.

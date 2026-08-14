@@ -1,14 +1,18 @@
 // ============================================================
 // src/repl/utils_test.ts — global-install utils
 //
-// installPromptInput is a host-side helper that wires global
-// prompt/confirm to an async input channel. The kernel never uses
-// it; these tests verify routing, restore behavior, and that
-// nothing leaks across tests.
+// installPromptInput / installConsoleCapture are host-side helpers
+// that wire globals to an input channel / output sink. The kernel
+// never uses them; these tests verify routing, restore behavior,
+// and that nothing leaks across tests.
 // ============================================================
 
 import { assertEquals } from "@std/assert";
-import { type InputFn, installPromptInput } from "./utils.ts";
+import {
+  type InputFn,
+  installConsoleCapture,
+  installPromptInput,
+} from "./utils.ts";
 
 Deno.test("utils - prompt input binds async prompt/confirm", async () => {
   const calls: Array<{ prompt: string; password: boolean }> = [];
@@ -46,4 +50,34 @@ Deno.test("utils - using restore undoes the install on block exit", () => {
     assertEquals(typeof g.prompt, "function");
   }
   assertEquals(g.prompt, before);
+});
+
+Deno.test("utils - console capture routes methods to the sink", () => {
+  const emitted: Array<{ kind: "stdout" | "stderr"; text: string }> = [];
+  const restore = installConsoleCapture((kind, text) =>
+    emitted.push({ kind, text })
+  );
+  try {
+    console.log("hello", 42);
+    console.warn("careful");
+    console.error("boom");
+    console.trace("traced");
+    console.assert(false, "asserted");
+  } finally {
+    restore();
+  }
+  assertEquals(emitted.length, 5);
+  assertEquals(emitted[0], { kind: "stdout", text: "hello 42" });
+  assertEquals(emitted[1].kind, "stderr");
+  assertEquals(emitted[1].text, "careful");
+  assertEquals(emitted[2].text, "boom");
+  assertEquals(emitted[3].text, "traced");
+  assertEquals(emitted[4].text, "asserted");
+});
+
+Deno.test("utils - console capture restore puts originals back", () => {
+  const originalLog = console.log;
+  const restore = installConsoleCapture(() => {});
+  restore();
+  assertEquals(console.log, originalLog);
 });

@@ -317,7 +317,7 @@ function delay(ms: number): Promise<void> {
 
 // Resolve boot.ts relative to this source.
 const BOOT_SPECIFIER = resolveModuleSpecifier(
-  "../repl/boot.ts",
+  "./boot.ts",
   import.meta.url,
 );
 const DEFAULT_IMPORT_DOMAINS = [

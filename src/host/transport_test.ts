@@ -1,5 +1,5 @@
 // ============================================================
-// src/repl/transport_test.ts — StdioTransport framing tests
+// src/host/transport_test.ts — StdioTransport framing tests
 //
 // Pure I/O: drives StdioTransport against in-memory reader/writer
 // streams and a stub kernel. No subprocess is involved. Verifies
@@ -11,7 +11,7 @@
 
 import { assertEquals } from "@std/assert";
 import { StdioTransport } from "./transport.ts";
-import type { ReplEvalResult } from "./types.ts";
+import type { ReplEvalResult } from "../repl/types.ts";
 
 class MemReader {
   private chunks: Uint8Array[];

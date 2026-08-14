@@ -1,5 +1,5 @@
 // ============================================================
-// src/repl/transport.ts — StdioTransport
+// src/host/transport.ts — StdioTransport (Aves' host transport)
 //
 // Newline-delimited JSON codec for child processes whose
 // stdin/stdout is the channel. PURE I/O: it parses `eval` /
@@ -7,9 +7,11 @@
 // ReplKernel, but never spawns or supervises a process (design
 // doc §5.4). The wire protocol is byte-identical to Aves' legacy
 // repl-boot child; `timeout_ms` maps to an AbortSignal.timeout.
+// This is Aves' transport (a stdio child host) — notebook hosts
+// write their own channel transport over the same kernel.
 // ============================================================
 
-import type { ReplEvalResult } from "./types.ts";
+import type { ReplEvalResult } from "../repl/types.ts";
 
 interface StdioReader {
   read(buf: Uint8Array): Promise<number | null>;
