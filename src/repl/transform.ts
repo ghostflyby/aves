@@ -1,8 +1,13 @@
 // ============================================================
-// src/repl/transform.ts — AST source transformer for REPL
+// src/repl/transform.ts — AST cell transformer
 //
-// Uses acorn (parse) + astring (generate) to transform JS code
-// so it can run in a persistent scope.
+// Public entry: `@ghostflyby/aves/repl/transform`
+// Functional system: turn a cell's ESM source into a
+// `return (async () => {...})()` body that runs in a persistent
+// scope (declarations → scope.*, imports → await import, reference
+// rewriting, auto-return).
+//
+// Uses acorn (parse) + astring (generate).
 // Three transformations:
 //   1. Import declarations → scope.x = (await import("spec")).x
 //   2. Variable/function declarations → scope.x = ...

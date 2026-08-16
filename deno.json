@@ -4,6 +4,8 @@
   "exports": {
     ".": "./main.ts",
     "./repl": "./src/repl/mod.ts",
+    "./repl/transform": "./src/repl/transform.ts",
+    "./repl/engine": "./src/repl/eval-engine.ts",
     "./host": "./src/host/mod.ts"
   },
   "license": "MIT",

@@ -1,11 +1,16 @@
 // ============================================================
-// src/repl/eval-engine.ts — in-process evaluation engine
+// src/repl/eval-engine.ts — bare in-process evaluation engine
 //
-// Owns the persistent scope and the esbuild-wasm + AST transform
-// pipeline behind the AsyncFunction wrapper (top-level await). The
-// engine is a pure evaluator: it installs no globals and produces
-// no output events — global wiring (console.*, prompt, Deno.jupyter.*)
-// is host-owned (design doc §5.2).
+// Public entry: `@ghostflyby/aves/repl/engine`
+// Functional system: evaluate one cell at a time against a
+// persistent scope (esbuild-wasm transform → AST rewrite →
+// AsyncFunction, top-level await), with no FIFO queue and no
+// cancellation wiring — hosts that drive evaluation themselves
+// use this directly; most hosts use `createReplKernel` instead.
+//
+// The engine is a pure evaluator: it installs no globals and
+// produces no output events — global wiring (console.*, prompt,
+// Deno.jupyter.*) is host-owned (design doc §5.2).
 // ============================================================
 
 import esbuildWasmCjs from "esbuild-wasm/lib/browser.js";

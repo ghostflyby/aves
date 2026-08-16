@@ -617,9 +617,15 @@ The SDK was redesigned pre-1.0 around host neutrality and minimal surface:
 
 ## 10. Open questions
 
-- Should the SDK ship as a separate export (`@ghostflyby/aves/repl`) or stay a
-  re-export of `@ghostflyby/aves`? Separate export is implemented — notebook
-  hosts import `@ghostflyby/aves/repl` and never pull MCP/db modules.
+- Export layout (resolved): the SDK ships as sub-path exports, one
+  self-explanatory functional system per entry. `@ghostflyby/aves/repl` is the
+  common basics (`createReplKernel` + core types);
+  `@ghostflyby/aves/repl/transform` is the AST cell transformer for hosts
+  assembling their own pipeline; `@ghostflyby/aves/repl/engine` is the bare
+  `EvalEngine` for hosts driving evaluation themselves;
+  `@ghostflyby/aves
+  /host` is Aves' own assembly (transport, broker policy,
+  supervision).
 - Whether the SDK should also ship host-side global-install helpers
   (`installConsoleCapture` / `installPromptInput`) in a later version — the
   kernel itself stays argument-free and installs no globals.
