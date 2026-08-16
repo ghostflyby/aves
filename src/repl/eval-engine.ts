@@ -92,13 +92,14 @@ export class EvalEngine {
     const esm = await t(code, { loader: "ts", format: "esm" });
     const wrapped = transform(esm.code, this.declaredNames);
     // The transformed body reads/writes the persistent scope through the
-    // `scope` parameter (see transform.ts JSDoc): it is a plain lexical
+    // `$aves$scope` parameter (see transform.ts JSDoc): a plain lexical
     // parameter, so closures inside the body (methods, callbacks) resolve
-    // `scope.x` correctly regardless of their `this`.
+    // `$aves$scope.x` correctly regardless of their `this`. The name is
+    // engineered to be virtually collision-free with user identifiers.
     const AF = Object.getPrototypeOf(async function () {}).constructor as new (
       ...args: string[]
     ) => (...args: unknown[]) => Promise<unknown>;
-    const fn = new AF("scope", wrapped);
+    const fn = new AF("$aves$scope", wrapped);
     const resultPromise = fn(this.scope);
     return await raceWithAbort(resultPromise, options?.signal);
   }
