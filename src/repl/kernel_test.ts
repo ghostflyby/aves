@@ -72,6 +72,19 @@ Deno.test("kernel - class declaration persists across evals", async () => {
   await kernel.dispose();
 });
 
+Deno.test("kernel - user may declare a variable named scope", async () => {
+  // The persistent scope is injected via `this`, so "scope" is a normal
+  // user identifier — no collision with the injection mechanism.
+  const kernel = await createReplKernel();
+  const r1 = await evalCollect(kernel, "const scope = 5; scope + 1");
+  assertEquals(r1.ok, true);
+  assertEquals(r1.data, 6);
+  const r2 = await evalCollect(kernel, "scope + 1");
+  assertEquals(r2.ok, true);
+  assertEquals(r2.data, 6);
+  await kernel.dispose();
+});
+
 Deno.test("kernel - FIFO serialization across queued executions", async () => {
   const kernel = await createReplKernel();
   await evalCollect(kernel, "const log: string[] = []");

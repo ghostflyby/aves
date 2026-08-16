@@ -4,14 +4,15 @@
 // Public entry: `@ghostflyby/aves/repl/transform`
 // Functional system: turn a cell's ESM source into a
 // `return (async () => {...})()` body that runs in a persistent
-// scope (declarations → scope.*, imports → await import, reference
-// rewriting, auto-return).
+// scope (declarations → `this.*`, imports → await import, reference
+// rewriting, auto-return; `this` is the injected scope binding — see
+// the `transform` JSDoc).
 //
 // Uses acorn (parse) + astring (generate).
 // Three transformations:
-//   1. Import declarations → scope.x = (await import("spec")).x
-//   2. Variable/function declarations → scope.x = ...
-//   3. Reference rewrite: declared names → scope.x
+//   1. Import declarations → this.x = (await import("spec")).x
+//   2. Variable/function declarations → this.x = ...
+//   3. Reference rewrite: declared names → this.x
 // ============================================================
 
 import * as acorn from "acorn";
@@ -36,11 +37,22 @@ type EstreeNode = Record<string, unknown> & {
  *
  *   `return (async () => { <rewritten statements> })();`
  *
- * intended for `new AsyncFunction("scope", result)(scope)`. Declarations
- * become `scope.x = ...` assignments, imports become
- * `scope.x = (await import("...")).x`, references to declared names become
- * `scope.x` (closure-aware), and the last expression is auto-returned. The
- * async wrapper makes top-level `await` legal.
+ * intended for `new AsyncFunction(body)`. Declarations become
+ * `this.x = ...` assignments, imports become `this.x = (await import(...)).x`,
+ * references to declared names become `this.x` (closure-aware), and the last
+ * expression is auto-returned. The async wrapper makes top-level `await`
+ * legal.
+ *
+ * SCOPE BINDING — the persistent scope is injected via **`this`**, not a
+ * parameter name: call the function with `fn.call(scopeObject)` (the arrow
+ * inside captures `this`). Because `this` is an implicit binding, user code
+ * may freely declare or reference identifiers named `scope` — there is no
+ * reserved identifier. Two consequences: (1) the body is non-strict, so
+ * calling without `.call(...)` makes `this` the global object and silently
+ * writes to it — always call with `.call(scope)`; (2) a user's *own* top-level
+ * `this` (e.g. `return this`) resolves to the injected scope object instead
+ * of the usual `undefined`/global, which is an intentional, documented
+ * deviation.
  */
 export function transform(
   code: string,
@@ -326,19 +338,20 @@ function transformClassDecl(
 // ============================================================
 
 /**
- * Rewrite identifier references to `scope.<name>` for every name in
+ * Rewrite identifier references to `this.<name>` for every name in
  * `declaredNames`, skipping locals shadowed inside functions/blocks and
- * leaving existing `scope.` accesses untouched (closure and shadowing
- * aware). Used internally by `transform` as its reference phase; exported
- * for hosts that assemble their own pipeline.
+ * leaving `this.x` accesses untouched (`this` is the injected scope binding
+ * and cannot be shadowed by an identifier — see the `transform` JSDoc for the
+ * binding contract). Used internally by `transform` as its reference phase;
+ * exported for hosts that assemble their own pipeline.
  *
  * INPUT — code whose declarations have **already been rewritten to
- * `scope.x = ...` assignments** (e.g. `transform`'s phase-1 output). Feeding
+ * `this.x = ...` assignments** (e.g. `transform`'s phase-1 output). Feeding
  * raw source such as `const x = 1; x + 1` leaves the declaration local while
- * rewriting the reference to `scope.x`, so the reference will not resolve.
+ * rewriting the reference to `this.x`, so the reference will not resolve.
  *
  * OUTPUT — the same statement list as the input, with only identifier
- * references replaced by `scope.<name>`: no declaration rewriting, no
+ * references replaced by `this.<name>`: no declaration rewriting, no
  * auto-return, no async-IIFE wrapper. An empty `declaredNames` returns the
  * input unchanged.
  */
@@ -492,12 +505,13 @@ function walkRef(
       property: EstreeNode;
       computed: boolean;
     };
-    if (
-      me.object.type === "Identifier" &&
-      (me.object as unknown as { name: string }).name === "scope" &&
-      !me.computed
-    ) {
-      walkRef(me.object, names, localScopes, reps, false);
+    if (me.object.type === "ThisExpression") {
+      // `this.x` — the injected scope binding (see the transform JSDoc).
+      // The object is a ThisExpression, never an Identifier, so it cannot be
+      // shadowed or re-written; just rewrite the property reference.
+      if (me.computed) {
+        walkRef(me.property, names, localScopes, reps, false);
+      }
       return;
     }
     walkRef(me.object, names, localScopes, reps, false);
@@ -519,12 +533,12 @@ function walkRef(
         property: EstreeNode;
         computed: boolean;
       };
-      if (
-        me.object.type === "Identifier" &&
-        (me.object as unknown as { name: string }).name === "scope" &&
-        !me.computed
-      ) {
-        walkRef(me.object, names, localScopes, reps, false);
+      if (me.object.type === "ThisExpression") {
+        // `this.x = ...` (the injected scope binding): never re-write, just
+        // descend into the computed property and the right-hand side.
+        if (me.computed) {
+          walkRef(me.property, names, localScopes, reps, false);
+        }
         walkRef(ae.right, names, localScopes, reps, false);
         return;
       }
@@ -564,7 +578,8 @@ function walkRef(
     const name = (node as unknown as { name: string }).name;
     const isLocal = localScopes.some((s) => s.has(name));
     if (names.has(name) && !isLocal) {
-      reps.push({ s: node.start!, e: node.end!, t: `scope.${name}` });
+      // Rewrite the reference to the injected scope binding (`this`).
+      reps.push({ s: node.start!, e: node.end!, t: `this.${name}` });
       return;
     }
   }
@@ -608,7 +623,7 @@ function id(name: string): EstreeNode {
 function scopeMem(name: string): EstreeNode {
   return {
     type: "MemberExpression",
-    object: { type: "Identifier", name: "scope" },
+    object: { type: "ThisExpression" },
     property: { type: "Identifier", name },
     computed: false,
     optional: false,

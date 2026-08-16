@@ -91,11 +91,15 @@ export class EvalEngine {
     const t = this.#transform ?? await getTransform();
     const esm = await t(code, { loader: "ts", format: "esm" });
     const wrapped = transform(esm.code, this.declaredNames);
+    // The transformed body assigns/reads the persistent scope via `this`
+    // (see transform.ts JSDoc): the scope object is injected by calling with
+    // .call(scope). The body's own arrow captures `this`, so top-level await
+    // and the reference rewrite both resolve against the same scope.
     const AF = Object.getPrototypeOf(async function () {}).constructor as new (
       ...args: string[]
-    ) => (...args: unknown[]) => Promise<unknown>;
-    const fn = new AF("scope", wrapped);
-    const resultPromise = fn(this.scope);
+    ) => (this: unknown) => Promise<unknown>;
+    const fn = new AF(wrapped);
+    const resultPromise = fn.call(this.scope);
     return await raceWithAbort(resultPromise, options?.signal);
   }
 

@@ -74,18 +74,18 @@ and migrating the transform backend to esbuild-wasm.
 
 ## 4. Current coupling map
 
-| File                                                    | Responsibility                                                                                                      | Couplings that block reuse                                                                                                                                 |
-| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/repl/transform.ts`                                 | Pure AST transform (acorn+astring): declarations→`scope.*`, reference rewrite, `import`→`await import`, auto-return | none — already standalone                                                                                                                                  |
-| `src/repl/repl-boot.ts`                                 | Child entry: esbuild transform → `transform()` → `AsyncFunction` scope eval; stdio JSON loop                        | `npm:esbuild`; hard-coded stdin/stdout JSON protocol                                                                                                       |
-| `src/repl/session.ts`                                   | Child-process session: spawn, JSON protocol, resolveMap, timeouts, broker wiring                                    | imports `createRunBrokerPolicy` / `globalAbort` / `resolveModuleSpecifier` from `../runner.ts` (MCP-run layer); esbuild-wasm package-dir read pre-approval |
-| `src/repl/manager.ts`                                   | `ReplManager` registry                                                                                              | thin; depends on `session.ts` only                                                                                                                         |
-| `src/broker.ts`                                         | `DENO_PERMISSION_BROKER_PATH` server, `BrokerPolicy`, elicit flow                                                   | none — generic, reusable as-is                                                                                                                             |
-| `src/runner.ts`                                         | Module/skill run orchestration + Aves default policy + `globalAbort`                                                | contains the only policy + repl wiring; module-run path stays Aves-owned                                                                                   |
-| `src/policy.ts`                                         | Permission resolution, Codex ceiling                                                                                | Aves-specific (skills, Codex)                                                                                                                              |
-| `src/run-store.ts`, `db-worker.ts`, `mcp/query-pool.ts` | SQLite runs/approvals + query                                                                                       | Aves-only persistence                                                                                                                                      |
-| `src/config.ts`, `paths.ts`, `skill.ts`                 | Aves config dirs, skills                                                                                            | Aves-only                                                                                                                                                  |
-| `src/mcp/server.ts`                                     | MCP tools + elicitation                                                                                             | consumer of `repl/` and `runner/`                                                                                                                          |
+| File                                                    | Responsibility                                                                                                                                  | Couplings that block reuse                                                                                                                                 |
+| ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/repl/transform.ts`                                 | Pure AST transform (acorn+astring): declarations→`this.*` (the injected scope binding), reference rewrite, `import`→`await import`, auto-return | none — already standalone                                                                                                                                  |
+| `src/repl/repl-boot.ts`                                 | Child entry: esbuild transform → `transform()` → `AsyncFunction` scope eval; stdio JSON loop                                                    | `npm:esbuild`; hard-coded stdin/stdout JSON protocol                                                                                                       |
+| `src/repl/session.ts`                                   | Child-process session: spawn, JSON protocol, resolveMap, timeouts, broker wiring                                                                | imports `createRunBrokerPolicy` / `globalAbort` / `resolveModuleSpecifier` from `../runner.ts` (MCP-run layer); esbuild-wasm package-dir read pre-approval |
+| `src/repl/manager.ts`                                   | `ReplManager` registry                                                                                                                          | thin; depends on `session.ts` only                                                                                                                         |
+| `src/broker.ts`                                         | `DENO_PERMISSION_BROKER_PATH` server, `BrokerPolicy`, elicit flow                                                                               | none — generic, reusable as-is                                                                                                                             |
+| `src/runner.ts`                                         | Module/skill run orchestration + Aves default policy + `globalAbort`                                                                            | contains the only policy + repl wiring; module-run path stays Aves-owned                                                                                   |
+| `src/policy.ts`                                         | Permission resolution, Codex ceiling                                                                                                            | Aves-specific (skills, Codex)                                                                                                                              |
+| `src/run-store.ts`, `db-worker.ts`, `mcp/query-pool.ts` | SQLite runs/approvals + query                                                                                                                   | Aves-only persistence                                                                                                                                      |
+| `src/config.ts`, `paths.ts`, `skill.ts`                 | Aves config dirs, skills                                                                                                                        | Aves-only                                                                                                                                                  |
+| `src/mcp/server.ts`                                     | MCP tools + elicitation                                                                                                                         | consumer of `repl/` and `runner/`                                                                                                                          |
 
 Notable facts confirmed by reading:
 
@@ -598,15 +598,24 @@ The SDK was redesigned pre-1.0 around host neutrality and minimal surface:
 
 - **Top-level `class` declarations are now persisted** across cells: fixed by
   handling `ClassDeclaration` in `transformStatement` (emit
-  `scope.Foo = class
+  `this.Foo = class
   Foo { ... }`, register `Foo` in `declaredNames`) and
   adding a `ClassExpression` branch to `rewriteReferences`' scope walker so the
-  class expression's own name binding is not rewritten to `scope.Foo`. Verified
+  class expression's own name binding is not rewritten to `this.Foo`. Verified
   end to end: `class Foo { static v = 42 }` then `Foo.v` → `42` in both the
   child protocol and `createReplKernel` paths.
 - **Top-level `await` requires the async-IIFE wrapper** (already the design);
   code that relies on module-level `var` hoisting across cells follows scope
   semantics, not V8 REPL semantics — document as an intentional deviation.
+- **The persistent scope is injected via `this`** (not a parameter name): the
+  transformed body is called with `fn.call(scope)`, so user code may freely
+  declare/reference identifiers named `scope` — there is no reserved identifier
+  and no collision (the old `scope`-parameter scheme crashed on
+  `const scope = ...`). Consequences: the body is non-strict, so calling without
+  `.call(...)` would write to the global object (the SDK is the only caller and
+  always passes the scope); and a user's own top-level `this` resolves to the
+  injected scope object instead of `undefined`/global — an intentional,
+  documented deviation.
 - **Cooperative interrupt only**: `kernel.interrupt()` rejects the in-flight
   race but cannot abort arbitrary synchronous work; hosts must still escalate to
   process termination for hard hangs (matches Aves' timeout → SIGKILL path).
