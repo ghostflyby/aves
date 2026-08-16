@@ -1,18 +1,32 @@
 {
   "name": "@ghostflyby/aves",
-  "version": "0.4.1",
-  "exports": "./main.ts",
+  "version": "0.5.0",
+  "exports": {
+    ".": "./main.ts",
+    "./repl": "./src/repl/mod.ts",
+    "./repl/transform": "./src/repl/transform.ts",
+    "./repl/engine": "./src/repl/eval-engine.ts",
+    "./host": "./src/host/mod.ts"
+  },
   "license": "MIT",
+  "publish": {
+    "exclude": [
+      ".github/",
+      "docs/",
+      "deno.lock",
+      "**/*_test.ts"
+    ]
+  },
   "tasks": {
     "dev": "deno run --watch main.ts",
-    "test": "deno test --allow-read --allow-write --allow-env --allow-run --allow-sys --unstable-worker-options --unstable-raw-imports"
+    "test": "deno test --allow-read --allow-write --allow-env --allow-run --allow-sys --allow-net --unstable-worker-options --unstable-raw-imports"
   },
   "imports": {
     "@cfworker/json-schema": "npm:@cfworker/json-schema@^4.1.1",
     "acorn": "npm:acorn@^8",
     "astring": "npm:astring@^1",
     "@modelcontextprotocol/client": "npm:@modelcontextprotocol/client@^2.0.0-alpha.2",
-    "esbuild": "npm:esbuild@^0.25",
+    "esbuild-wasm": "npm:esbuild-wasm@0.25.12",
     "@modelcontextprotocol/server": "npm:@modelcontextprotocol/server@^2.0.0-alpha.2",
     "@std/assert": "jsr:@std/assert@^1.0.19",
     "@std/toml": "jsr:@std/toml@^1.0.11",

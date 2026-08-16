@@ -1,0 +1,157 @@
+// ============================================================
+// src/repl/eval-engine.ts — bare in-process evaluation engine
+//
+// Public entry: `@ghostflyby/aves/repl/engine`
+// Functional system: evaluate one cell at a time against a
+// persistent scope (esbuild-wasm transform → AST rewrite →
+// AsyncFunction, top-level await), with no FIFO queue and no
+// cancellation wiring — hosts that drive evaluation themselves
+// use this directly; most hosts use `createReplKernel` instead.
+//
+// The engine is a pure evaluator: it installs no globals and
+// produces no output events — global wiring (console.*, prompt,
+// Deno.jupyter.*) is host-owned (design doc §5.2).
+// ============================================================
+
+import esbuildWasmCjs from "esbuild-wasm/lib/browser.js";
+import { transform } from "./transform.ts";
+import type { CodeTransform } from "./types.ts";
+
+const esbuildWasm = esbuildWasmCjs as unknown as {
+  initialize(options: {
+    wasmModule: WebAssembly.Module;
+    worker: boolean;
+  }): Promise<void>;
+  transform: CodeTransform;
+};
+
+/**
+ * esbuild-wasm's browser entry (lib/browser.js) runs the Go WASM service
+ * in-process: initialize({ wasmModule, worker: false }) compiles the package's
+ * esbuild.wasm on this thread — no native binary and no `node` subprocess.
+ * The wasm payload is read from the package directory on first use; hosts
+ * grant that one read (or route it through their permission broker).
+ *
+ * esbuild-wasm's initialize() may only run once per process, so the resolved
+ * transform is memoised at module scope — all engines in a process share the
+ * single WASM service.
+ */
+let transformPromise: Promise<CodeTransform> | null = null;
+
+function getTransform(): Promise<CodeTransform> {
+  if (!transformPromise) {
+    transformPromise = (async () => {
+      const entryUrl = import.meta.resolve("esbuild-wasm/lib/browser.js");
+      const wasmBytes = await Deno.readFile(
+        new URL("../esbuild.wasm", entryUrl),
+      );
+      const wasmModule = new WebAssembly.Module(wasmBytes);
+      await esbuildWasm.initialize({ wasmModule, worker: false });
+      return esbuildWasm.transform;
+    })();
+    transformPromise.catch(() => {
+      transformPromise = null;
+    });
+  }
+  return transformPromise;
+}
+
+/**
+ * In-process cell evaluator. Holds the persistent scope and declared-name
+ * set shared across executions, and drives transform → AST rewrite →
+ * AsyncFunction (top-level await). A lower-level building block; most hosts
+ * use `createReplKernel` instead.
+ */
+export class EvalEngine {
+  /** Persistent scope object cells assign declarations into. */
+  readonly scope: Record<string, unknown> = {};
+  /** Names declared by executed cells (drives reference rewriting). */
+  readonly declaredNames: Set<string> = new Set();
+  #disposed = false;
+  #transform: CodeTransform | null;
+
+  /**
+   * @param options.transform Injected cell transformer. Defaults to the
+   *   process-global esbuild-wasm singleton (shared by all engines).
+   */
+  constructor(options?: { transform?: CodeTransform }) {
+    this.#transform = options?.transform ?? null;
+  }
+
+  /**
+   * Transform + evaluate one cell in the persistent scope. Rejects on
+   * transform/parse errors, runtime errors, or abort (signal).
+   */
+  async runCell(
+    code: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<unknown> {
+    if (this.#disposed) throw new Error("REPL engine disposed");
+    if (options?.signal?.aborted) throw abortError(options.signal);
+    const t = this.#transform ?? await getTransform();
+    const esm = await t(code, { loader: "ts", format: "esm" });
+    const wrapped = transform(esm.code, this.declaredNames);
+    // The transformed body reads/writes the persistent scope through the
+    // `scope` parameter (see transform.ts JSDoc): it is a plain lexical
+    // parameter, so closures inside the body (methods, callbacks) resolve
+    // `scope.x` correctly regardless of their `this`.
+    const AF = Object.getPrototypeOf(async function () {}).constructor as new (
+      ...args: string[]
+    ) => (...args: unknown[]) => Promise<unknown>;
+    const fn = new AF("scope", wrapped);
+    const resultPromise = fn(this.scope);
+    return await raceWithAbort(resultPromise, options?.signal);
+  }
+
+  /** Persistent scope snapshot (declared names + value reference). */
+  snapshot(): { names: string[]; values: Record<string, unknown> } {
+    const values: Record<string, unknown> = {};
+    for (const name of this.declaredNames) {
+      if (name in this.scope) values[name] = this.scope[name];
+    }
+    return { names: [...this.declaredNames], values };
+  }
+
+  /** Clear scope + declared names (restart without process respawn). */
+  reset(): void {
+    for (const key of Object.keys(this.scope)) delete this.scope[key];
+    this.declaredNames.clear();
+  }
+
+  /** Free the engine; runCell rejects afterwards. */
+  dispose(): void {
+    this.#disposed = true;
+  }
+}
+
+function abortError(signal: AbortSignal): Error {
+  const reason = signal.reason;
+  if (reason instanceof DOMException && reason.name === "TimeoutError") {
+    return new Error("REPL eval timed out");
+  }
+  return new Error("REPL eval interrupted");
+}
+
+async function raceWithAbort<T>(
+  promise: Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  if (!signal) return await promise;
+  const onAbort = () => rejectWithAbort();
+  let rejectWithAbort!: () => void;
+  const abortPromise = new Promise<never>((_, reject) => {
+    rejectWithAbort = () => reject(abortError(signal));
+  });
+  if (signal.aborted) {
+    rejectWithAbort();
+  } else {
+    signal.addEventListener("abort", onAbort, { once: true });
+  }
+  try {
+    return await Promise.race([promise, abortPromise]);
+  } finally {
+    // Detach the bridge so a long-lived signal (e.g. a server-wide
+    // AbortSignal) does not leak a listener per evaluation.
+    signal.removeEventListener("abort", onAbort);
+  }
+}

@@ -42,7 +42,7 @@ import {
   StdioServerTransport,
   WebStandardStreamableHTTPServerTransport,
 } from "@modelcontextprotocol/server";
-import { replManager } from "../repl/manager.ts";
+import { replManager } from "../host/manager.ts";
 
 import type { ElicitResolver, PermissionRequest } from "../broker.ts";
 import type { SandboxState } from "../sandbox-state.ts";

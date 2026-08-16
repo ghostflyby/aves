@@ -1,5 +1,11 @@
 // ============================================================
-// src/repl/session.ts — ReplSession class
+// src/host/child-session.ts — Aves host-side REPL session
+//
+// Aves' host assembly (design doc §5.3): spawns `deno run boot.ts`
+// with broker + env + cwd, drives the stdio transport, and owns
+// the supervision state machine (timeouts, SIGKILL escalation,
+// broker lifecycle, restart signalling). The SDK kernel never
+// spawns or kills anything.
 // ============================================================
 
 import { fileURLToPath } from "node:url";
@@ -9,22 +15,22 @@ import {
   type PermissionRequest,
   startBroker,
 } from "../broker.ts";
-import {
-  createRunBrokerPolicy,
-  globalAbort,
-  resolveModuleSpecifier,
-  type RunElicitContext,
-} from "../runner.ts";
+import { globalAbort, resolveModuleSpecifier } from "../runner.ts";
+import { createRunBrokerPolicy, type RunElicitContext } from "./policy.ts";
 import type { Permissions } from "../types.ts";
 import type { SandboxState } from "../sandbox-state.ts";
 
+/** Result of one REPL evaluation (mirrors ReplEvalResult over the wire). */
 export interface ReplResult {
   ok: boolean;
+  /** Final-expression value from the child. */
   data?: unknown;
   error?: string;
+  /** True when the child's state is unusable (e.g. eval timeout). */
   fatal?: boolean;
 }
 
+/** Public metadata about a live REPL session (used by list/create). */
 export interface ReplSessionInfo {
   id: string;
   description: string;
@@ -34,6 +40,12 @@ export interface ReplSessionInfo {
   cwd: string;
 }
 
+/**
+ * A live REPL child session. Owns the spawned `deno run boot.ts` process and
+ * its permission broker, drives the stdio protocol, and supervises lifecycle
+ * (eval timeouts → SIGKILL escalation, close/restart). Host-side assembly per
+ * design doc §5.3 — the SDK kernel never spawns or kills anything.
+ */
 export class ReplSession {
   readonly id: string;
   readonly description: string;
@@ -113,6 +125,7 @@ export class ReplSession {
                   ok: msg.ok as boolean,
                   data: msg.data,
                   error: msg.error,
+                  fatal: msg.fatal as boolean | undefined,
                 });
               }
             } else if (msg.type === "closed") {
@@ -164,6 +177,10 @@ export class ReplSession {
     }
   }
 
+  /**
+   * Evaluate one cell in this session. `timeoutMs` (or the session default)
+   * escalates to SIGKILL on expiry and marks the session `fatal`.
+   */
   eval(code: string, timeoutMs?: number): Promise<ReplResult> {
     if (this.closed) {
       return Promise.resolve({ ok: false, error: "session closed" });
@@ -207,6 +224,7 @@ export class ReplSession {
     });
   }
 
+  /** Public session metadata (id, pid, eval count, cwd, timestamps). */
   getInfo(): ReplSessionInfo {
     return {
       id: this.id,
@@ -218,6 +236,7 @@ export class ReplSession {
     };
   }
 
+  /** Gracefully close the session; escalates to SIGKILL after a short wait. */
   async close(): Promise<void> {
     if (this.cleanupStarted) {
       await this.cleanupStarted;
@@ -294,12 +313,12 @@ function delay(ms: number): Promise<void> {
 }
 
 // ============================================================
-// Spawn — uses createRunBrokerPolicy from runner.ts
+// Spawn — host assembly with broker + supervision
 // ============================================================
 
-// Resolve repl-boot.ts relative to this source, falling back to PWD/src.
+// Resolve boot.ts relative to this source.
 const BOOT_SPECIFIER = resolveModuleSpecifier(
-  "./repl-boot.ts",
+  "./boot.ts",
   import.meta.url,
 );
 const DEFAULT_IMPORT_DOMAINS = [
@@ -313,15 +332,27 @@ const DEFAULT_IMPORT_DOMAINS = [
   "registry.npmjs.org:443",
 ];
 
+/** Options for spawnReplSession. */
 export interface SpawnOptions {
+  /** Human-readable session label (default: "REPL <id8>"). */
   description?: string;
+  /** Working directory for the child (default: current process cwd). */
   cwd?: string;
+  /** Read/write paths granted up front (added to the broker's extraDirs). */
   permissions?: Permissions;
+  /** Codex sandbox ceiling passed to the default policy (null = read-only auto-approve). */
   codexCeiling?: SandboxState | null;
+  /** Default per-eval timeout; expires → SIGKILL + fatal. */
   timeoutMs?: number;
+  /** Broker elicitation handler; without it elicits resolve false (deny). */
   onElicit?: (req: PermissionRequest, resolve: ElicitResolver) => Promise<void>;
 }
 
+/**
+ * Spawn a `deno run src/repl/boot.ts` child with a permission broker, default
+ * import allowlist, and the given cwd/env, returning a supervised
+ * `ReplSession`. Host-side assembly per design doc §5.3.
+ */
 export async function spawnReplSession(
   options: SpawnOptions = {},
 ): Promise<ReplSession> {
@@ -337,40 +368,23 @@ export async function spawnReplSession(
   const extraDirs = [realCwd];
   if (permissions.read) extraDirs.push(...permissions.read);
   if (permissions.write) extraDirs.push(...permissions.write);
+  // esbuild-wasm runs fully in-process (lib/browser.js, worker:false), but it
+  // reads the package's esbuild.wasm payload once at first transform. Pre-allow
+  // that one read so REPL startup never fires broker elicitation — this replaces
+  // the native esbuild binary path pre-approval that the run-spawning backend
+  // required.
+  try {
+    const wasmDir = fileURLToPath(
+      new URL("..", import.meta.resolve("esbuild-wasm/lib/browser.js")),
+    );
+    extraDirs.push(wasmDir);
+  } catch { /* keep going if resolution fails */ }
 
   const ctx: RunElicitContext = {
     codeHash: null,
     codexCeiling,
     extraDirs,
   };
-  let esbuildBinaryPath: string | null = null;
-
-  // Resolve the exact native esbuild binary path for broker pre-approval,
-  // so esbuild initialisation does not fire broker elicitation during REPL startup.
-  // esbuild spawns a platform-specific native binary via child_process.spawn().
-  // Path pattern: .../npm/registry.npmjs.org/@esbuild/<platform>/<version>/bin/esbuild
-  {
-    const esbuildUrl = import.meta.resolve("npm:esbuild");
-    // esbuildUrl: file:///.../npm/registry.npmjs.org/esbuild/0.25.12/lib/main.js
-    const m = esbuildUrl.match(/\/esbuild\/([\d.]+)\//);
-    if (m) {
-      const version = m[1];
-      // Map Deno arch to esbuild's npm package naming
-      // deno: aarch64 → esbuild: arm64; deno: x86_64 → esbuild: x64
-      const archMap: Record<string, string> = {
-        aarch64: "arm64",
-        x86_64: "x64",
-      };
-      const esbuildArch = archMap[Deno.build.arch] ?? Deno.build.arch;
-      const platformPkg = "@esbuild/" + Deno.build.os + "-" + esbuildArch;
-      const esbuildPath = esbuildUrl.replace(
-        /\/esbuild\/[\d.]+\/.*$/,
-        "/" + platformPkg + "/" + version + "/bin/esbuild",
-      );
-      esbuildBinaryPath = await Deno.realPath(fileURLToPath(esbuildPath));
-      ctx.preApprovedRunPaths = [esbuildBinaryPath];
-    }
-  }
 
   const policy = createRunBrokerPolicy(ctx);
   if (options.onElicit) {

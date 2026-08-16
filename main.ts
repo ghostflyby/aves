@@ -11,7 +11,7 @@ import { closeDb } from "./src/run-store.ts";
 // Force resolution of @modelcontextprotocol/server peer dependency
 import "@cfworker/json-schema";
 import { disposePool } from "./src/mcp/query-pool.ts";
-import { replManager } from "./src/repl/manager.ts";
+import { replManager } from "./src/host/manager.ts";
 import { globalAbort } from "./src/runner.ts";
 
 // ============================================================

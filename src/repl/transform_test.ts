@@ -1,6 +1,6 @@
-import { assertEquals, assertStringIncludes } from "@std/assert";
+import { assertEquals, assertStringIncludes, assertThrows } from "@std/assert";
 import { rewriteReferences, transform } from "./transform.ts";
-import { replManager } from "./manager.ts";
+import { replManager } from "../host/manager.ts";
 
 // ============================================================
 // Part 1: transform() tests (pure functions)
@@ -32,6 +32,20 @@ Deno.test("transform - function", () => {
   const r = transform("function foo() {}", names);
   assertStringIncludes(r, "scope.foo = function foo()");
   assertEquals(names.has("foo"), true);
+});
+
+Deno.test("transform - class", () => {
+  const names = new Set<string>();
+  const r = transform("class Foo { static v = 1 }", names);
+  assertStringIncludes(r, "scope.Foo = class Foo");
+  assertEquals(names.has("Foo"), true);
+});
+
+Deno.test("transform - class with extends", () => {
+  const names = new Set<string>();
+  const r = transform("class Foo extends Base {}", names);
+  assertStringIncludes(r, "scope.Foo = class Foo extends Base");
+  assertEquals(names.has("Foo"), true);
 });
 
 Deno.test("transform - import default", () => {
@@ -71,6 +85,38 @@ Deno.test("transform - returns final expression", () => {
   names.add("x");
   const r = transform("x + 1", names);
   assertStringIncludes(r, "return scope.x + 1;");
+});
+
+Deno.test("transform - declaring a variable named scope throws", () => {
+  // `scope` is the reserved injection parameter name; a user declaration
+  // would collide with the injected scope object, so it fails loudly instead
+  // of silently corrupting the binding.
+  const names = new Set<string>();
+  assertThrows(
+    () => transform("const scope = 5; scope + 1", names),
+    Error,
+    "reserved identifier",
+  );
+});
+
+Deno.test("transform - referencing scope in a later cell throws", () => {
+  // The reserved name stays reserved across cells: a bare reference to it in
+  // user code fails loudly rather than exposing the scope object.
+  const names = new Set<string>();
+  transform("const x = 1", names);
+  assertThrows(
+    () => transform("x + scope", names),
+    Error,
+    "reserved identifier",
+  );
+});
+
+Deno.test("transform - user this stays untouched", () => {
+  // `this` is a normal user expression inside the transformed body (the
+  // scope travels via the `scope` parameter, not `this`).
+  const names = new Set<string>();
+  const r = transform("this", names);
+  assertStringIncludes(r, "return this;");
 });
 
 Deno.test("transform - destructuring object", () => {
@@ -141,6 +187,14 @@ Deno.test("rewriteRef - closure reference", () => {
   assertStringIncludes(r, "return scope.x;");
 });
 
+Deno.test("rewriteRef - class reference", () => {
+  const names = new Set<string>();
+  names.add("Foo");
+  const code = "scope.Foo = class Foo {};\nFoo.v;";
+  const r = rewriteReferences(code, names);
+  assertStringIncludes(r, "scope.Foo.v;");
+});
+
 Deno.test("rewriteRef - shadowed local", () => {
   const names = new Set<string>();
   names.add("x");
@@ -157,10 +211,11 @@ Deno.test("rewriteRef - arrow closure", () => {
   assertStringIncludes(r, "scope.x");
 });
 
-Deno.test("rewriteRef - scope.x guard", () => {
+Deno.test("rewriteRef - scope.x is not rewritten", () => {
   const names = new Set<string>();
   names.add("x");
   const r = rewriteReferences("scope.x = 1;", names);
+  assertEquals(r.includes("scope.x"), true);
   assertEquals(r.includes("scope.scope"), false);
 });
 
@@ -177,14 +232,25 @@ Deno.test("rewriteRef - computed member property is rewritten", () => {
   assertStringIncludes(r, "scope.obj[scope.key]");
 });
 
+Deno.test("rewriteRef - scope.x computed property is rewritten", () => {
+  const names = new Set<string>(["k"]);
+  const r = rewriteReferences("scope.x[k];", names);
+  assertStringIncludes(r, "scope.x[scope.k]");
+});
+
 // ============================================================
 // Part 3: repl-boot integration tests
 // Expressions auto-return from the async IIFE; declarations persist in scope.
 // Tests focus on child-process protocol and state behavior.
 // ============================================================
 
-const BOOT_PATH = new URL("./repl-boot.ts", import.meta.url).pathname;
+const BOOT_PATH = new URL("../host/boot.ts", import.meta.url).pathname;
 const PROJECT_DIR = new URL("..", import.meta.url).pathname;
+// esbuild-wasm reads its esbuild.wasm payload from the package directory at
+// first transform; grant the child that one read explicitly.
+const WASM_DIR =
+  new URL("..", import.meta.resolve("esbuild-wasm/lib/browser.js"))
+    .pathname;
 
 async function bootEval(
   inputs: string[],
@@ -193,10 +259,8 @@ async function bootEval(
     args: [
       "run",
       "--no-prompt",
-      "--allow-run",
-      "--allow-ffi",
       "--allow-env",
-      "--allow-read=.,/Users/ghostflyby/repos/learn/aves",
+      "--allow-read=.," + PROJECT_DIR + "," + WASM_DIR,
       "--allow-import=deno.land:443,jsr.io:443,esm.sh:443,raw.esm.sh:443,cdn.jsdelivr.net:443,raw.githubusercontent.com:443,gist.githubusercontent.com:443,registry.npmjs.org:443",
       BOOT_PATH,
     ],
@@ -242,6 +306,17 @@ Deno.test("repl-boot - state across evals", async () => {
   ]);
   assertEquals(r[0].ok, true);
   assertEquals(r[1].ok, true);
+});
+
+Deno.test("repl-boot - class persists across evals", async () => {
+  const r = await bootEval([
+    '{"type":"eval","id":"1","code":"class Foo { static v = 42 }"}',
+    '{"type":"eval","id":"2","code":"Foo.v"}',
+    '{"type":"close"}',
+  ]);
+  assertEquals(r[0].ok, true);
+  assertEquals(r[1].ok, true);
+  assertEquals(r[1].data, 42);
 });
 
 Deno.test("repl-boot - top-level await", async () => {
