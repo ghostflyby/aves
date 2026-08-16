@@ -24,16 +24,23 @@ type EstreeNode = Record<string, unknown> & {
 };
 
 /**
- * Transform a cell's source so it runs in a persistent scope: import
- * declarations become `scope.x = (await import(...)).x`, variable/function/
- * class declarations become `scope.x = ...`, references to declared names are
- * rewritten to `scope.x` (closure-aware), and the last expression is
- * auto-returned. The output is a `return (async () => {...})()` body (top-level
- * await) intended for a `new AsyncFunction("scope", ...)` wrapper.
+ * Transform a cell's ESM source so it runs in a persistent scope.
  *
- * @param code ESM source (typically esbuild-transformed TS → ESM).
- * @param declaredNames Accumulates declared names; pass the same set across
- *   cells so earlier declarations keep resolving.
+ * INPUT — `code` must be valid ESM JavaScript: `import`/`export` statements
+ * are allowed, but TypeScript must already be stripped (esbuild
+ * `loader: "ts"`, `format: "esm"` is the canonical pipeline). `declaredNames`
+ * carries names declared by earlier cells; pass the **same set** across cells
+ * so prior declarations keep resolving.
+ *
+ * OUTPUT — a function *body*, not a complete program:
+ *
+ *   `return (async () => { <rewritten statements> })();`
+ *
+ * intended for `new AsyncFunction("scope", result)(scope)`. Declarations
+ * become `scope.x = ...` assignments, imports become
+ * `scope.x = (await import("...")).x`, references to declared names become
+ * `scope.x` (closure-aware), and the last expression is auto-returned. The
+ * async wrapper makes top-level `await` legal.
  */
 export function transform(
   code: string,
@@ -320,9 +327,20 @@ function transformClassDecl(
 
 /**
  * Rewrite identifier references to `scope.<name>` for every name in
- * `declaredNames`, skipping locals shadowed inside functions/blocks (closure
- * and shadowing aware). Used internally by `transform`; exported for hosts
- * that assemble their own pipeline.
+ * `declaredNames`, skipping locals shadowed inside functions/blocks and
+ * leaving existing `scope.` accesses untouched (closure and shadowing
+ * aware). Used internally by `transform` as its reference phase; exported
+ * for hosts that assemble their own pipeline.
+ *
+ * INPUT — code whose declarations have **already been rewritten to
+ * `scope.x = ...` assignments** (e.g. `transform`'s phase-1 output). Feeding
+ * raw source such as `const x = 1; x + 1` leaves the declaration local while
+ * rewriting the reference to `scope.x`, so the reference will not resolve.
+ *
+ * OUTPUT — the same statement list as the input, with only identifier
+ * references replaced by `scope.<name>`: no declaration rewriting, no
+ * auto-return, no async-IIFE wrapper. An empty `declaredNames` returns the
+ * input unchanged.
  */
 export function rewriteReferences(
   code: string,
