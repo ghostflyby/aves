@@ -1,4 +1,4 @@
-import { assertEquals, assertStringIncludes } from "@std/assert";
+import { assertEquals, assertStringIncludes, assertThrows } from "@std/assert";
 import { rewriteReferences, transform } from "./transform.ts";
 import { replManager } from "../host/manager.ts";
 
@@ -9,62 +9,62 @@ import { replManager } from "../host/manager.ts";
 Deno.test("transform - const", () => {
   const names = new Set<string>();
   const r = transform("const x = 1", names);
-  assertStringIncludes(r, "this.x = 1");
+  assertStringIncludes(r, "scope.x = 1");
   assertEquals(names.has("x"), true);
 });
 
 Deno.test("transform - let", () => {
   const names = new Set<string>();
   const r = transform("let y = 2", names);
-  assertStringIncludes(r, "this.y = 2");
+  assertStringIncludes(r, "scope.y = 2");
   assertEquals(names.has("y"), true);
 });
 
 Deno.test("transform - var", () => {
   const names = new Set<string>();
   const r = transform("var z = 3", names);
-  assertStringIncludes(r, "this.z = 3");
+  assertStringIncludes(r, "scope.z = 3");
   assertEquals(names.has("z"), true);
 });
 
 Deno.test("transform - function", () => {
   const names = new Set<string>();
   const r = transform("function foo() {}", names);
-  assertStringIncludes(r, "this.foo = function foo()");
+  assertStringIncludes(r, "scope.foo = function foo()");
   assertEquals(names.has("foo"), true);
 });
 
 Deno.test("transform - class", () => {
   const names = new Set<string>();
   const r = transform("class Foo { static v = 1 }", names);
-  assertStringIncludes(r, "this.Foo = class Foo");
+  assertStringIncludes(r, "scope.Foo = class Foo");
   assertEquals(names.has("Foo"), true);
 });
 
 Deno.test("transform - class with extends", () => {
   const names = new Set<string>();
   const r = transform("class Foo extends Base {}", names);
-  assertStringIncludes(r, "this.Foo = class Foo extends Base");
+  assertStringIncludes(r, "scope.Foo = class Foo extends Base");
   assertEquals(names.has("Foo"), true);
 });
 
 Deno.test("transform - import default", () => {
   const names = new Set<string>();
   const r = transform('import x from "pkg"', names);
-  assertStringIncludes(r, 'this.x = (await import("pkg")).default');
+  assertStringIncludes(r, 'scope.x = (await import("pkg")).default');
 });
 
 Deno.test("transform - import named", () => {
   const names = new Set<string>();
   const r = transform('import { a, b } from "pkg"', names);
-  assertStringIncludes(r, 'this.a = (await import("pkg")).a');
-  assertStringIncludes(r, 'this.b = (await import("pkg")).b');
+  assertStringIncludes(r, 'scope.a = (await import("pkg")).a');
+  assertStringIncludes(r, 'scope.b = (await import("pkg")).b');
 });
 
 Deno.test("transform - import namespace", () => {
   const names = new Set<string>();
   const r = transform('import * as m from "pkg"', names);
-  assertStringIncludes(r, 'this.m = await import("pkg")');
+  assertStringIncludes(r, 'scope.m = await import("pkg")');
 });
 
 Deno.test("transform - import side-effect", () => {
@@ -84,24 +84,36 @@ Deno.test("transform - returns final expression", () => {
   const names = new Set<string>();
   names.add("x");
   const r = transform("x + 1", names);
-  assertStringIncludes(r, "return this.x + 1;");
+  assertStringIncludes(r, "return scope.x + 1;");
 });
 
-Deno.test("transform - user may declare a variable named scope", () => {
-  // `this` is the scope binding, so "scope" is a normal user identifier:
-  // declaration and reference both land on the persistent scope with no
-  // collision with the injection mechanism.
+Deno.test("transform - declaring a variable named scope throws", () => {
+  // `scope` is the reserved injection parameter name; a user declaration
+  // would collide with the injected scope object, so it fails loudly instead
+  // of silently corrupting the binding.
   const names = new Set<string>();
-  const r = transform("const scope = 5; scope + 1", names);
-  assertStringIncludes(r, "this.scope = 5;");
-  assertStringIncludes(r, "return this.scope + 1;");
-  assertEquals(names.has("scope"), true);
+  assertThrows(
+    () => transform("const scope = 5; scope + 1", names),
+    Error,
+    "reserved identifier",
+  );
+});
+
+Deno.test("transform - referencing scope in a later cell throws", () => {
+  // The reserved name stays reserved across cells: a bare reference to it in
+  // user code fails loudly rather than exposing the scope object.
+  const names = new Set<string>();
+  transform("const x = 1", names);
+  assertThrows(
+    () => transform("x + scope", names),
+    Error,
+    "reserved identifier",
+  );
 });
 
 Deno.test("transform - user this stays untouched", () => {
-  // A user's top-level `this` is left as-is; when the body runs with
-  // fn.call(scope) it resolves to the injected scope object (documented
-  // deviation from non-strict semantics).
+  // `this` is a normal user expression inside the transformed body (the
+  // scope travels via the `scope` parameter, not `this`).
   const names = new Set<string>();
   const r = transform("this", names);
   assertStringIncludes(r, "return this;");
@@ -110,38 +122,38 @@ Deno.test("transform - user this stays untouched", () => {
 Deno.test("transform - destructuring object", () => {
   const names = new Set<string>();
   const r = transform("const { a, b } = obj", names);
-  assertStringIncludes(r, "this.a");
-  assertStringIncludes(r, "this.b");
+  assertStringIncludes(r, "scope.a");
+  assertStringIncludes(r, "scope.b");
 });
 
 Deno.test("transform - destructuring array", () => {
   const names = new Set<string>();
   const r = transform("const [x, y] = arr", names);
-  assertStringIncludes(r, "this.x");
-  assertStringIncludes(r, "this.y");
+  assertStringIncludes(r, "scope.x");
+  assertStringIncludes(r, "scope.y");
 });
 
 Deno.test("transform - destructuring default", () => {
   const names = new Set<string>();
   const r = transform("const { a = 5 } = obj", names);
-  assertStringIncludes(r, "this.a");
+  assertStringIncludes(r, "scope.a");
   assertStringIncludes(r, "??");
 });
 
 Deno.test("transform - destructuring rest", () => {
   const names = new Set<string>();
   const r = transform("const [a, ...rest] = arr", names);
-  assertStringIncludes(r, "this.a");
-  assertStringIncludes(r, "this.rest");
+  assertStringIncludes(r, "scope.a");
+  assertStringIncludes(r, "scope.rest");
 });
 
 Deno.test("transform - destructuring reads temporary from scope", () => {
   const names = new Set<string>();
   const r = transform("const { a, b } = { a: 2, b: 3 }; a + b", names);
-  assertStringIncludes(r, "this.__aves_tmp_");
+  assertStringIncludes(r, "scope.__aves_tmp_");
   assertStringIncludes(r, ".a");
   assertStringIncludes(r, ".b");
-  assertStringIncludes(r, "return this.a + this.b;");
+  assertStringIncludes(r, "return scope.a + scope.b;");
 });
 
 // ============================================================
@@ -151,8 +163,8 @@ Deno.test("transform - destructuring reads temporary from scope", () => {
 Deno.test("rewriteRef - basic", () => {
   const names = new Set<string>();
   names.add("x");
-  const r = rewriteReferences("this.x = 1", names);
-  assertStringIncludes(r, "this.x = 1");
+  const r = rewriteReferences("scope.x = 1", names);
+  assertStringIncludes(r, "scope.x = 1");
 });
 
 Deno.test("rewriteRef - empty names", () => {
@@ -164,29 +176,29 @@ Deno.test("rewriteRef - undeclared not rewritten", () => {
   const names = new Set<string>();
   names.add("x");
   const r = rewriteReferences("console.log(y)", names);
-  assertEquals(r.includes("this.y"), false);
+  assertEquals(r.includes("scope.y"), false);
 });
 
 Deno.test("rewriteRef - closure reference", () => {
   const names = new Set<string>();
   names.add("x");
-  const code = "this.x = 1;\nfunction f() { return x; }";
+  const code = "scope.x = 1;\nfunction f() { return x; }";
   const r = rewriteReferences(code, names);
-  assertStringIncludes(r, "return this.x;");
+  assertStringIncludes(r, "return scope.x;");
 });
 
 Deno.test("rewriteRef - class reference", () => {
   const names = new Set<string>();
   names.add("Foo");
-  const code = "this.Foo = class Foo {};\nFoo.v;";
+  const code = "scope.Foo = class Foo {};\nFoo.v;";
   const r = rewriteReferences(code, names);
-  assertStringIncludes(r, "this.Foo.v;");
+  assertStringIncludes(r, "scope.Foo.v;");
 });
 
 Deno.test("rewriteRef - shadowed local", () => {
   const names = new Set<string>();
   names.add("x");
-  const code = "this.x = 1;\nfunction f() { const x = 2; return x; }";
+  const code = "scope.x = 1;\nfunction f() { const x = 2; return x; }";
   const r = rewriteReferences(code, names);
   assertStringIncludes(r, "return x;");
 });
@@ -194,36 +206,36 @@ Deno.test("rewriteRef - shadowed local", () => {
 Deno.test("rewriteRef - arrow closure", () => {
   const names = new Set<string>();
   names.add("x");
-  const code = "this.x = 1;\nconst f = () => x;";
+  const code = "scope.x = 1;\nconst f = () => x;";
   const r = rewriteReferences(code, names);
-  assertStringIncludes(r, "this.x");
+  assertStringIncludes(r, "scope.x");
 });
 
-Deno.test("rewriteRef - this.x is not rewritten", () => {
+Deno.test("rewriteRef - scope.x is not rewritten", () => {
   const names = new Set<string>();
   names.add("x");
-  const r = rewriteReferences("this.x = 1;", names);
-  assertEquals(r.includes("this.x"), true);
-  assertEquals(r.includes("this.this"), false);
+  const r = rewriteReferences("scope.x = 1;", names);
+  assertEquals(r.includes("scope.x"), true);
+  assertEquals(r.includes("scope.scope"), false);
 });
 
 Deno.test("rewriteRef - object literal keys are not rewritten", () => {
   const names = new Set<string>(["a", "b"]);
   const r = rewriteReferences("const obj = { a: b };", names);
-  assertStringIncludes(r, "{ a: this.b }");
-  assertEquals(r.includes("this.a:"), false);
+  assertStringIncludes(r, "{ a: scope.b }");
+  assertEquals(r.includes("scope.a:"), false);
 });
 
 Deno.test("rewriteRef - computed member property is rewritten", () => {
   const names = new Set<string>(["obj", "key"]);
   const r = rewriteReferences("obj[key];", names);
-  assertStringIncludes(r, "this.obj[this.key]");
+  assertStringIncludes(r, "scope.obj[scope.key]");
 });
 
-Deno.test("rewriteRef - this.x computed property is rewritten", () => {
+Deno.test("rewriteRef - scope.x computed property is rewritten", () => {
   const names = new Set<string>(["k"]);
-  const r = rewriteReferences("this.x[k];", names);
-  assertStringIncludes(r, "this.x[this.k]");
+  const r = rewriteReferences("scope.x[k];", names);
+  assertStringIncludes(r, "scope.x[scope.k]");
 });
 
 // ============================================================

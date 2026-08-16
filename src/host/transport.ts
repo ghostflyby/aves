@@ -113,6 +113,7 @@ async function writeResult(
       ok: result.ok,
       data: result.data,
       error: result.error,
+      fatal: result.fatal,
     });
   } catch (err) {
     // Non-serializable final value: fall back to an error result, exactly

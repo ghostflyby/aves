@@ -55,6 +55,10 @@ export function createReplKernel(
       item.resolveResult({
         ok: false,
         error: abortMessage(item.controller.signal),
+        // A timed-out execution may have left the persistent scope in an
+        // unknown state (its async work can keep running after the race
+        // settles), so the host must treat the session as unusable.
+        fatal: isTimeout(item.controller.signal),
       });
       return;
     }
@@ -67,6 +71,7 @@ export function createReplKernel(
       item.resolveResult({
         ok: false,
         error: err instanceof Error ? err.message : String(err),
+        fatal: isTimeout(item.controller.signal),
       });
     }
   }
@@ -164,4 +169,9 @@ function abortMessage(signal: AbortSignal): string {
     return "REPL eval timed out";
   }
   return "REPL eval interrupted";
+}
+
+function isTimeout(signal: AbortSignal): boolean {
+  return signal.reason instanceof DOMException &&
+    signal.reason.name === "TimeoutError";
 }

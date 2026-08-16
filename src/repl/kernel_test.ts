@@ -72,16 +72,45 @@ Deno.test("kernel - class declaration persists across evals", async () => {
   await kernel.dispose();
 });
 
-Deno.test("kernel - user may declare a variable named scope", async () => {
-  // The persistent scope is injected via `this`, so "scope" is a normal
-  // user identifier — no collision with the injection mechanism.
+Deno.test("kernel - declaring a variable named scope fails loudly", async () => {
+  // `scope` is the reserved injection parameter; user code declaring it gets
+  // an explicit error (not silent corruption of the scope binding).
   const kernel = await createReplKernel();
-  const r1 = await evalCollect(kernel, "const scope = 5; scope + 1");
+  const r = await evalCollect(kernel, "const scope = 5; scope + 1");
+  assertEquals(r.ok, false);
+  assertStringIncludes(r.error ?? "", "reserved identifier");
+  await kernel.dispose();
+});
+
+Deno.test("kernel - method closures resolve persistent names", async () => {
+  // Regression for the `this`-binding scheme: the scope travels via the
+  // `scope` parameter, so methods called with another `this` still resolve
+  // declared names correctly (lexical capture).
+  const kernel = await createReplKernel();
+  const r1 = await evalCollect(
+    kernel,
+    "const y = 7; class A { m() { return y } }",
+  );
   assertEquals(r1.ok, true);
-  assertEquals(r1.data, 6);
-  const r2 = await evalCollect(kernel, "scope + 1");
+  const r2 = await evalCollect(kernel, "new A().m()");
   assertEquals(r2.ok, true);
-  assertEquals(r2.data, 6);
+  assertEquals(r2.data, 7);
+  await kernel.dispose();
+});
+
+Deno.test("kernel - object method and static class field closures resolve", async () => {
+  const kernel = await createReplKernel();
+  const r1 = await evalCollect(
+    kernel,
+    "const q = 3; const obj = { m() { return q } }; const base = 10; class B { static v = base }",
+  );
+  assertEquals(r1.ok, true);
+  const r2 = await evalCollect(kernel, "obj.m()");
+  assertEquals(r2.ok, true);
+  assertEquals(r2.data, 3);
+  const r3 = await evalCollect(kernel, "B.v");
+  assertEquals(r3.ok, true);
+  assertEquals(r3.data, 10);
   await kernel.dispose();
 });
 

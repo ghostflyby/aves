@@ -125,6 +125,7 @@ export class ReplSession {
                   ok: msg.ok as boolean,
                   data: msg.data,
                   error: msg.error,
+                  fatal: msg.fatal as boolean | undefined,
                 });
               }
             } else if (msg.type === "closed") {

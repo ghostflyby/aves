@@ -91,15 +91,15 @@ export class EvalEngine {
     const t = this.#transform ?? await getTransform();
     const esm = await t(code, { loader: "ts", format: "esm" });
     const wrapped = transform(esm.code, this.declaredNames);
-    // The transformed body assigns/reads the persistent scope via `this`
-    // (see transform.ts JSDoc): the scope object is injected by calling with
-    // .call(scope). The body's own arrow captures `this`, so top-level await
-    // and the reference rewrite both resolve against the same scope.
+    // The transformed body reads/writes the persistent scope through the
+    // `scope` parameter (see transform.ts JSDoc): it is a plain lexical
+    // parameter, so closures inside the body (methods, callbacks) resolve
+    // `scope.x` correctly regardless of their `this`.
     const AF = Object.getPrototypeOf(async function () {}).constructor as new (
       ...args: string[]
-    ) => (this: unknown) => Promise<unknown>;
-    const fn = new AF(wrapped);
-    const resultPromise = fn.call(this.scope);
+    ) => (...args: unknown[]) => Promise<unknown>;
+    const fn = new AF("scope", wrapped);
+    const resultPromise = fn(this.scope);
     return await raceWithAbort(resultPromise, options?.signal);
   }
 
@@ -137,16 +137,21 @@ async function raceWithAbort<T>(
   signal?: AbortSignal,
 ): Promise<T> {
   if (!signal) return await promise;
-  return await Promise.race([
-    promise,
-    new Promise<never>((_, reject) => {
-      if (signal.aborted) {
-        reject(abortError(signal));
-        return;
-      }
-      signal.addEventListener("abort", () => reject(abortError(signal)), {
-        once: true,
-      });
-    }),
-  ]);
+  const onAbort = () => rejectWithAbort();
+  let rejectWithAbort!: () => void;
+  const abortPromise = new Promise<never>((_, reject) => {
+    rejectWithAbort = () => reject(abortError(signal));
+  });
+  if (signal.aborted) {
+    rejectWithAbort();
+  } else {
+    signal.addEventListener("abort", onAbort, { once: true });
+  }
+  try {
+    return await Promise.race([promise, abortPromise]);
+  } finally {
+    // Detach the bridge so a long-lived signal (e.g. a server-wide
+    // AbortSignal) does not leak a listener per evaluation.
+    signal.removeEventListener("abort", onAbort);
+  }
 }

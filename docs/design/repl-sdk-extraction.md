@@ -607,15 +607,14 @@ The SDK was redesigned pre-1.0 around host neutrality and minimal surface:
 - **Top-level `await` requires the async-IIFE wrapper** (already the design);
   code that relies on module-level `var` hoisting across cells follows scope
   semantics, not V8 REPL semantics — document as an intentional deviation.
-- **The persistent scope is injected via `this`** (not a parameter name): the
-  transformed body is called with `fn.call(scope)`, so user code may freely
-  declare/reference identifiers named `scope` — there is no reserved identifier
-  and no collision (the old `scope`-parameter scheme crashed on
-  `const scope = ...`). Consequences: the body is non-strict, so calling without
-  `.call(...)` would write to the global object (the SDK is the only caller and
-  always passes the scope); and a user's own top-level `this` resolves to the
-  injected scope object instead of `undefined`/global — an intentional,
-  documented deviation.
+- **The persistent scope is injected via the `scope` parameter**
+  (`new AsyncFunction("scope", body)(scopeObject)`): a plain lexical parameter,
+  so closures inside the body (methods, callbacks) resolve `scope.x` correctly
+  regardless of their `this`. `scope` is therefore a **reserved identifier**:
+  user code declaring it (e.g. `const scope = ...`) or referencing it throws an
+  explicit error rather than corrupting the binding. (An earlier `this`-binding
+  scheme was rejected because method closures called with another receiver
+  silently resolved `this.y` to `undefined`.)
 - **Cooperative interrupt only**: `kernel.interrupt()` rejects the in-flight
   race but cannot abort arbitrary synchronous work; hosts must still escalate to
   process termination for hard hangs (matches Aves' timeout → SIGKILL path).

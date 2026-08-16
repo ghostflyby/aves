@@ -4,15 +4,15 @@
 // Public entry: `@ghostflyby/aves/repl/transform`
 // Functional system: turn a cell's ESM source into a
 // `return (async () => {...})()` body that runs in a persistent
-// scope (declarations → `this.*`, imports → await import, reference
-// rewriting, auto-return; `this` is the injected scope binding — see
-// the `transform` JSDoc).
+// scope (declarations → `scope.*`, imports → await import, reference
+// rewriting, auto-return; `scope` is the reserved injection
+// parameter — see the `transform` JSDoc).
 //
 // Uses acorn (parse) + astring (generate).
 // Three transformations:
-//   1. Import declarations → this.x = (await import("spec")).x
-//   2. Variable/function declarations → this.x = ...
-//   3. Reference rewrite: declared names → this.x
+//   1. Import declarations → scope.x = (await import("spec")).x
+//   2. Variable/function declarations → scope.x = ...
+//   3. Reference rewrite: declared names → scope.x
 // ============================================================
 
 import * as acorn from "acorn";
@@ -23,6 +23,14 @@ type EstreeNode = Record<string, unknown> & {
   start?: number;
   end?: number;
 };
+
+/**
+ * Name of the AsyncFunction parameter that carries the persistent scope.
+ * It is a reserved identifier inside the transformed body: the transformer
+ * rejects user code that declares or references `scope` (with an explicit
+ * error) instead of silently corrupting the injection.
+ */
+const SCOPE_NAME = "scope";
 
 /**
  * Transform a cell's ESM source so it runs in a persistent scope.
@@ -37,27 +45,37 @@ type EstreeNode = Record<string, unknown> & {
  *
  *   `return (async () => { <rewritten statements> })();`
  *
- * intended for `new AsyncFunction(body)`. Declarations become
- * `this.x = ...` assignments, imports become `this.x = (await import(...)).x`,
- * references to declared names become `this.x` (closure-aware), and the last
+ * intended for `new AsyncFunction("scope", body)` called as `fn(scopeObject)`.
+ * Declarations become `scope.x = ...` assignments, imports become
+ * `scope.x = (await import(...)).x`, references to declared names become
+ * `scope.x` (closure-aware — the parameter is captured lexically, so methods
+ * and nested functions resolve persistent names correctly), and the last
  * expression is auto-returned. The async wrapper makes top-level `await`
  * legal.
  *
- * SCOPE BINDING — the persistent scope is injected via **`this`**, not a
- * parameter name: call the function with `fn.call(scopeObject)` (the arrow
- * inside captures `this`). Because `this` is an implicit binding, user code
- * may freely declare or reference identifiers named `scope` — there is no
- * reserved identifier. Two consequences: (1) the body is non-strict, so
- * calling without `.call(...)` makes `this` the global object and silently
- * writes to it — always call with `.call(scope)`; (2) a user's *own* top-level
- * `this` (e.g. `return this`) resolves to the injected scope object instead
- * of the usual `undefined`/global, which is an intentional, documented
- * deviation.
+ * SCOPE BINDING — the persistent scope is the `scope` parameter, passed as
+ * `new AsyncFunction("scope", body)(scopeObject)`. Because it is a plain
+ * lexical parameter, closures inside the body (methods, callbacks) resolve
+ * `scope.x` correctly regardless of their `this`. `scope` is therefore a
+ * **reserved identifier**: user code that declares `scope` (e.g.
+ * `const scope = ...`) or references it throws an explicit error rather than
+ * corrupting the injection (this replaces the earlier `this`-binding scheme,
+ * which silently broke method-internal closures and the earlier
+ * `scope`-free scheme which crashed on user `scope` declarations).
  */
 export function transform(
   code: string,
   declaredNames: Set<string>,
 ): string {
+  // Reserve the injection parameter name: a user declaration of `scope`
+  // (here or in an earlier cell) would shadow/collide with the injected
+  // scope object. Fail loudly instead.
+  if (declaredNames.has(SCOPE_NAME)) {
+    throw new Error(
+      `'${SCOPE_NAME}' is a reserved identifier in REPL cells (it names the ` +
+        "persistent scope); declare it under a different name",
+    );
+  }
   const ast = acorn.parse(code, {
     ecmaVersion: "latest",
     sourceType: "module",
@@ -338,22 +356,22 @@ function transformClassDecl(
 // ============================================================
 
 /**
- * Rewrite identifier references to `this.<name>` for every name in
+ * Rewrite identifier references to `scope.<name>` for every name in
  * `declaredNames`, skipping locals shadowed inside functions/blocks and
- * leaving `this.x` accesses untouched (`this` is the injected scope binding
- * and cannot be shadowed by an identifier — see the `transform` JSDoc for the
- * binding contract). Used internally by `transform` as its reference phase;
- * exported for hosts that assemble their own pipeline.
+ * leaving `scope.x` accesses untouched (`scope` is the reserved injection
+ * parameter — see the `transform` JSDoc). Used internally by `transform` as
+ * its reference phase; exported for hosts that assemble their own pipeline.
  *
  * INPUT — code whose declarations have **already been rewritten to
- * `this.x = ...` assignments** (e.g. `transform`'s phase-1 output). Feeding
+ * `scope.x = ...` assignments** (e.g. `transform`'s phase-1 output). Feeding
  * raw source such as `const x = 1; x + 1` leaves the declaration local while
- * rewriting the reference to `this.x`, so the reference will not resolve.
+ * rewriting the reference to `scope.x`, so the reference will not resolve.
  *
  * OUTPUT — the same statement list as the input, with only identifier
- * references replaced by `this.<name>`: no declaration rewriting, no
+ * references replaced by `scope.<name>`: no declaration rewriting, no
  * auto-return, no async-IIFE wrapper. An empty `declaredNames` returns the
- * input unchanged.
+ * input unchanged. A bare user reference to `scope` (the reserved name)
+ * throws.
  */
 export function rewriteReferences(
   code: string,
@@ -505,10 +523,10 @@ function walkRef(
       property: EstreeNode;
       computed: boolean;
     };
-    if (me.object.type === "ThisExpression") {
-      // `this.x` — the injected scope binding (see the transform JSDoc).
-      // The object is a ThisExpression, never an Identifier, so it cannot be
-      // shadowed or re-written; just rewrite the property reference.
+    if (isScopeObject(me.object)) {
+      // `scope.x` — the injected scope binding (see the transform JSDoc).
+      // Never re-write the object; only the computed property is a real
+      // reference.
       if (me.computed) {
         walkRef(me.property, names, localScopes, reps, false);
       }
@@ -533,8 +551,8 @@ function walkRef(
         property: EstreeNode;
         computed: boolean;
       };
-      if (me.object.type === "ThisExpression") {
-        // `this.x = ...` (the injected scope binding): never re-write, just
+      if (isScopeObject(me.object)) {
+        // `scope.x = ...` (the injected scope binding): never re-write, just
         // descend into the computed property and the right-hand side.
         if (me.computed) {
           walkRef(me.property, names, localScopes, reps, false);
@@ -576,10 +594,19 @@ function walkRef(
 
   if (node.type === "Identifier" && !isDecl) {
     const name = (node as unknown as { name: string }).name;
+    // A bare user reference to the reserved injection parameter would expose
+    // the whole scope object; fail loudly instead (the reference rewriter
+    // never produces such a reference, so this is always user code).
+    if (name === SCOPE_NAME) {
+      throw new Error(
+        `'${SCOPE_NAME}' is a reserved identifier in REPL cells (it names the ` +
+          "persistent scope); reference it under a different name",
+      );
+    }
     const isLocal = localScopes.some((s) => s.has(name));
     if (names.has(name) && !isLocal) {
-      // Rewrite the reference to the injected scope binding (`this`).
-      reps.push({ s: node.start!, e: node.end!, t: `this.${name}` });
+      // Rewrite the reference to the injected scope binding (`scope`).
+      reps.push({ s: node.start!, e: node.end!, t: `${SCOPE_NAME}.${name}` });
       return;
     }
   }
@@ -620,10 +647,16 @@ function id(name: string): EstreeNode {
   return { type: "Identifier", name };
 }
 
+/** True when `node` is the reserved `scope` injection identifier. */
+function isScopeObject(node: EstreeNode): boolean {
+  return node.type === "Identifier" &&
+    (node as unknown as { name: string }).name === SCOPE_NAME;
+}
+
 function scopeMem(name: string): EstreeNode {
   return {
     type: "MemberExpression",
-    object: { type: "ThisExpression" },
+    object: { type: "Identifier", name: SCOPE_NAME },
     property: { type: "Identifier", name },
     computed: false,
     optional: false,
