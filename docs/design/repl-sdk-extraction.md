@@ -607,14 +607,15 @@ The SDK was redesigned pre-1.0 around host neutrality and minimal surface:
 - **Top-level `await` requires the async-IIFE wrapper** (already the design);
   code that relies on module-level `var` hoisting across cells follows scope
   semantics, not V8 REPL semantics — document as an intentional deviation.
-- **The persistent scope is injected via the `scope` parameter**
-  (`new AsyncFunction("scope", body)(scopeObject)`): a plain lexical parameter,
-  so closures inside the body (methods, callbacks) resolve `scope.x` correctly
-  regardless of their `this`. `scope` is therefore a **reserved identifier**:
-  user code declaring it (e.g. `const scope = ...`) or referencing it throws an
-  explicit error rather than corrupting the binding. (An earlier `this`-binding
-  scheme was rejected because method closures called with another receiver
-  silently resolved `this.y` to `undefined`.)
+- **The persistent scope is injected via the `$aves$scope` parameter**
+  (`new AsyncFunction("$aves$scope", body)(scopeObject)`): a plain lexical
+  parameter, so closures inside the body (methods, callbacks) resolve
+  `$aves$scope.x` correctly regardless of their `this`. The name is chosen to be
+  virtually collision-free with user identifiers — user cells may freely declare
+  and reference `scope` with no reserved-identifier friction. (An earlier
+  `this`-binding scheme was rejected because method closures called with another
+  receiver silently resolved `this.y` to `undefined`; a plain `scope` parameter
+  was rejected because it collided with ordinary user code.)
 - **Cooperative interrupt only**: `kernel.interrupt()` rejects the in-flight
   race but cannot abort arbitrary synchronous work; hosts must still escalate to
   process termination for hard hangs (matches Aves' timeout → SIGKILL path).

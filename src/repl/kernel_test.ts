@@ -72,20 +72,23 @@ Deno.test("kernel - class declaration persists across evals", async () => {
   await kernel.dispose();
 });
 
-Deno.test("kernel - declaring a variable named scope fails loudly", async () => {
-  // `scope` is the reserved injection parameter; user code declaring it gets
-  // an explicit error (not silent corruption of the scope binding).
+Deno.test("kernel - user may use a variable named scope", async () => {
+  // The injection parameter is `$aves$scope`, so `scope` is an ordinary user
+  // identifier that persists like any other declared name.
   const kernel = await createReplKernel();
-  const r = await evalCollect(kernel, "const scope = 5; scope + 1");
-  assertEquals(r.ok, false);
-  assertStringIncludes(r.error ?? "", "reserved identifier");
+  const r1 = await evalCollect(kernel, "const scope = 5; scope + 1");
+  assertEquals(r1.ok, true);
+  assertEquals(r1.data, 6);
+  const r2 = await evalCollect(kernel, "scope + 1");
+  assertEquals(r2.ok, true);
+  assertEquals(r2.data, 6);
   await kernel.dispose();
 });
 
 Deno.test("kernel - method closures resolve persistent names", async () => {
   // Regression for the `this`-binding scheme: the scope travels via the
-  // `scope` parameter, so methods called with another `this` still resolve
-  // declared names correctly (lexical capture).
+  // `$aves$scope` parameter, so methods called with another `this` still
+  // resolve declared names correctly (lexical capture).
   const kernel = await createReplKernel();
   const r1 = await evalCollect(
     kernel,
