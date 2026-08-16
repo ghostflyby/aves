@@ -7,6 +7,14 @@
     "./host": "./src/host/mod.ts"
   },
   "license": "MIT",
+  "publish": {
+    "exclude": [
+      ".github/",
+      "docs/",
+      "deno.lock",
+      "**/*_test.ts"
+    ]
+  },
   "tasks": {
     "dev": "deno run --watch main.ts",
     "test": "deno test --allow-read --allow-write --allow-env --allow-run --allow-sys --allow-net --unstable-worker-options --unstable-raw-imports"
