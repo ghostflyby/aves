@@ -416,34 +416,47 @@ changes for existing behavior (the REPL path already does not persist).
 ### 5.7 esbuild-wasm migration
 
 - Use the **browser entry** of `npm:esbuild-wasm` (`lib/browser.js`, the
-  `"browser"` field), **not** `lib/main.js`. The main entry re-implements the
-  native spawn (`ensureServiceIsRunning` spawns a `node bin/esbuild` service
-  child even in wasm mode, and `initialize({ wasmURL })` throws outside
-  browsers). `lib/browser.js` runs the Go WASM service **in-process** via
-  `initialize({ wasmModule, worker: false })` — it instantiates the package's
-  `esbuild.wasm` on the current thread with a `setTimeout`-driven event loop and
-  requires no `location`, no `fetch`, no subprocess. `transform()` output is
-  byte-identical to the native backend (verified on deno 2.9.5).
-- The wasm payload is resolved from the package directory at first transform:
-  `new URL("../esbuild.wasm", import.meta.resolve("esbuild-wasm/lib/browser.js"))`.
-  The child needs exactly one broker-visible read for that file; Aves' host-side
-  pre-approval adds the package dir to the policy's `extraDirs` (replacing the
-  old native-binary pre-approval). Measured broker traffic drops from 5 requests
-  (2 elicitable) to 1 silently-allowed read; the child's
-  `--allow-run`/`--allow-ffi` grants and the `ESBUILD_BINARY_PATH` /
-  `ESBUILD_WORKER_THREADS` env auto-allows are deleted.
+  `"browser"` field), **not** `lib/main.js`. The main entry is the Node API: it
+  always spawns a `node <pkg>/bin/esbuild` service child, and its `initialize`
+  rejects `wasmURL`/`wasmModule`/`worker` ("only works in the browser"), so it
+  has no in-process mode. `lib/browser.js` runs the Go WASM service
+  **in-process** via `initialize({ wasmModule, worker: false })` — it
+  instantiates the package's `esbuild.wasm` on the current thread with a
+  `setTimeout`-driven event loop and requires no `location`, no `fetch`, no
+  subprocess. `transform()` output is byte-identical to the native backend
+  (verified on deno 2.9.5).
+- The wasm payload is located at runtime via the **`npm:` scheme** —
+  `import.meta.resolve("npm:esbuild-wasm/esbuild.wasm")` — which resolves from
+  Aves' npm dependency metadata instead of the caller's import map. A
+  bare-specifier resolve (the original scheme,
+  `import.meta.resolve("esbuild-wasm/lib/browser.js")`) fails in consumer
+  contexts: it is not a static import, so it is not rewritten from Aves' own
+  `deno.json`, and the consumer's import map has no mapping for the bare name
+  (the dependency only exists in Aves' npm metadata). That failure was the
+  compatibility bug. The resolved package directory is pre-approved as one read
+  in the broker's `extraDirs`, and loading stays lazy (the ~10 MB payload
+  compiles only on the first transform).
+- Loading the wasm as an ESM module is not an option: the Go-compiled binary's
+  import section references the `gojs` namespace, which Deno's (and Node's) wasm
+  module integration tries to resolve as a module specifier and fails — the
+  module-import path cannot supply the Go import object. The payload is
+  therefore read as bytes and compiled with `new WebAssembly.Module`; esbuild
+  instantiates it against its own `gojs` import object in-process.
 - **Native esbuild is removed entirely** (`npm:esbuild` and its platform
   binaries are gone from `deno.json`/`deno.lock`): the `transformBackend` option
   was dropped and the SDK always uses the in-process wasm backend. The SDK's
   dependency graph is `node:` built-ins + `acorn` + `astring` + `esbuild-wasm`
   only, and no code path in the SDK can trigger a run/ffi permission request.
   Restoring the native backend (e.g. for high-throughput hosts) is a
-  `deno add npm:esbuild` plus a small branch in `eval-engine.ts`.
-- Offline: no `wasmURL` redirect is involved, so no browser-only constraint —
-  the package must be present (Deno's npm cache, `deno install`, or a checked-in
-  package copy). Whole-package presence is required because the entry and the
-  wasm live side by side in the package; this is the same embed pattern
-  Maieutics already uses for `maieutics-repl-client`.
+  `deno add npm:esbuild` plus a small branch in `eval-engine.ts`. The child's
+  `--allow-run`/`--allow-ffi` grants and the `ESBUILD_BINARY_PATH` /
+  `ESBUILD_WORKER_THREADS` env auto-allows are deleted.
+- Offline: the wasm payload is read from the local package, so no `wasmURL`
+  redirect and no browser-only constraint — the package must be present (Deno's
+  npm cache, `deno install`, or a checked-in package copy). Whole-package
+  presence is required because the entry and the wasm live side by side in the
+  package; this is the same embed pattern Maieutics already uses for
+  `maieutics-repl-client`.
 - Performance: WASM transform is slower per-call than the native binary but
   removes per-spawn native startup and is irrelevant at cell granularity. The
   in-process path pays the Go shim's event-loop overhead per `transform` call;

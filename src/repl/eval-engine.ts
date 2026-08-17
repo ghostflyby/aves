@@ -28,9 +28,19 @@ const esbuildWasm = esbuildWasmCjs as unknown as {
 /**
  * esbuild-wasm's browser entry (lib/browser.js) runs the Go WASM service
  * in-process: initialize({ wasmModule, worker: false }) compiles the package's
- * esbuild.wasm on this thread — no native binary and no `node` subprocess.
- * The wasm payload is read from the package directory on first use; hosts
- * grant that one read (or route it through their permission broker).
+ * esbuild.wasm on this thread — no native binary, no `node` subprocess, and no
+ * fetch (a compiled WebAssembly.Module is instantiated directly against
+ * esbuild's own Go import object).
+ *
+ * The wasm payload cannot be loaded as an ESM module: it is Go-compiled and
+ * its import section references the `gojs` namespace, which Deno's wasm module
+ * integration (like Node's) tries to resolve as a module specifier and fails.
+ * It is therefore read as bytes from the package directory (async read, then
+ * WebAssembly.compile — async compilation off the main thread), and the
+ * package directory itself is located via the `npm:` scheme — resolved from
+ * Aves' npm dependency metadata, so it works in any import-map context (e.g.
+ * JSR consumers) where a runtime bare-specifier resolve would fail. Loading is
+ * lazy: the ~10 MB wasm compiles only on the first transform.
  *
  * esbuild-wasm's initialize() may only run once per process, so the resolved
  * transform is memoised at module scope — all engines in a process share the
@@ -38,14 +48,22 @@ const esbuildWasm = esbuildWasmCjs as unknown as {
  */
 let transformPromise: Promise<CodeTransform> | null = null;
 
+/**
+ * Directory of the esbuild-wasm package, resolved from the `npm:` scheme
+ * rather than a bare specifier so it works in any import-map context. Package
+ * version is pinned in deno.json.
+ */
+export function esbuildWasmDir(): URL {
+  return new URL(".", import.meta.resolve("npm:esbuild-wasm/esbuild.wasm"));
+}
+
 function getTransform(): Promise<CodeTransform> {
   if (!transformPromise) {
     transformPromise = (async () => {
-      const entryUrl = import.meta.resolve("esbuild-wasm/lib/browser.js");
       const wasmBytes = await Deno.readFile(
-        new URL("../esbuild.wasm", entryUrl),
+        new URL("esbuild.wasm", esbuildWasmDir()),
       );
-      const wasmModule = new WebAssembly.Module(wasmBytes);
+      const wasmModule = await WebAssembly.compile(wasmBytes);
       await esbuildWasm.initialize({ wasmModule, worker: false });
       return esbuildWasm.transform;
     })();
