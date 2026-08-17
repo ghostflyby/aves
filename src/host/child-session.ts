@@ -17,6 +17,7 @@ import {
 } from "../broker.ts";
 import { globalAbort, resolveModuleSpecifier } from "../runner.ts";
 import { createRunBrokerPolicy, type RunElicitContext } from "./policy.ts";
+import { esbuildWasmDir } from "../repl/eval-engine.ts";
 import type { Permissions } from "../types.ts";
 import type { SandboxState } from "../sandbox-state.ts";
 
@@ -374,10 +375,7 @@ export async function spawnReplSession(
   // the native esbuild binary path pre-approval that the run-spawning backend
   // required.
   try {
-    const wasmDir = fileURLToPath(
-      new URL("..", import.meta.resolve("esbuild-wasm/lib/browser.js")),
-    );
-    extraDirs.push(wasmDir);
+    extraDirs.push(fileURLToPath(esbuildWasmDir()));
   } catch { /* keep going if resolution fails */ }
 
   const ctx: RunElicitContext = {

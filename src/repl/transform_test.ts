@@ -1,6 +1,7 @@
 import { assertEquals, assertStringIncludes } from "@std/assert";
 import { rewriteReferences, transform } from "./transform.ts";
 import { replManager } from "../host/manager.ts";
+import { esbuildWasmDir } from "./eval-engine.ts";
 
 // ============================================================
 // Part 1: transform() tests (pure functions)
@@ -244,9 +245,7 @@ const BOOT_PATH = new URL("../host/boot.ts", import.meta.url).pathname;
 const PROJECT_DIR = new URL("..", import.meta.url).pathname;
 // esbuild-wasm reads its esbuild.wasm payload from the package directory at
 // first transform; grant the child that one read explicitly.
-const WASM_DIR =
-  new URL("..", import.meta.resolve("esbuild-wasm/lib/browser.js"))
-    .pathname;
+const WASM_DIR = esbuildWasmDir().pathname;
 
 async function bootEval(
   inputs: string[],
