@@ -425,29 +425,23 @@ changes for existing behavior (the REPL path already does not persist).
   `setTimeout`-driven event loop and requires no `location`, no `fetch`, no
   subprocess. `transform()` output is byte-identical to the native backend
   (verified on deno 2.9.5).
-- The wasm payload is loaded as a **raw module import** —
-  `import("esbuild-wasm/esbuild.wasm", { with: { type: "bytes" } })` — resolved
-  from Aves' npm dependency metadata at build time, so no runtime specifier or
-  package-directory path is exposed to the host. The prior scheme resolved the
-  payload at runtime via `import.meta.resolve("esbuild-wasm/lib/browser.js")`, a
-  bare specifier that is only rewritten from Aves' own `deno.json`: consumer
-  contexts have no import-map mapping for it (the dependency exists only in
-  Aves' npm metadata), which broke the default transform backend there — the
-  compatibility bug this replaces. Loading stays lazy (the ~10 MB payload
-  compiles only on the first transform), and the payload read still needs read
-  access to the npm cache: the package directory is pre-approved as one read in
-  the broker's `extraDirs` and granted explicitly in tests.
-- Raw imports require the `--unstable-raw-imports` flag (or
-  `"unstable":
-  ["raw-imports"]` in the running project's deno.json); that
-  feature gate does **not** propagate from a dependency's deno.json to
-  consumers, so Aves' own REPL child spawn args enable it explicitly. Loading
-  the wasm as an ESM module is not an option: the Go-compiled binary's import
-  section references the `gojs` namespace, which Deno's (and Node's) wasm module
-  integration tries to resolve as a module specifier and fails — the
-  module-import path cannot supply the Go import object. The raw bytes are
-  compiled with `WebAssembly.compile` (async) and esbuild instantiates the
-  module against its own `gojs` import object in-process.
+- The wasm payload is located at runtime via the **`npm:` scheme** —
+  `import.meta.resolve("npm:esbuild-wasm/esbuild.wasm")` — which resolves from
+  Aves' npm dependency metadata instead of the caller's import map. A
+  bare-specifier resolve (the original scheme,
+  `import.meta.resolve("esbuild-wasm/lib/browser.js")`) fails in consumer
+  contexts: it is not a static import, so it is not rewritten from Aves' own
+  `deno.json`, and the consumer's import map has no mapping for the bare name
+  (the dependency only exists in Aves' npm metadata). That failure was the
+  compatibility bug. The resolved package directory is pre-approved as one read
+  in the broker's `extraDirs`, and loading stays lazy (the ~10 MB payload
+  compiles only on the first transform).
+- Loading the wasm as an ESM module is not an option: the Go-compiled binary's
+  import section references the `gojs` namespace, which Deno's (and Node's) wasm
+  module integration tries to resolve as a module specifier and fails — the
+  module-import path cannot supply the Go import object. The payload is
+  therefore read as bytes and compiled with `new WebAssembly.Module`; esbuild
+  instantiates it against its own `gojs` import object in-process.
 - **Native esbuild is removed entirely** (`npm:esbuild` and its platform
   binaries are gone from `deno.json`/`deno.lock`): the `transformBackend` option
   was dropped and the SDK always uses the in-process wasm backend. The SDK's
