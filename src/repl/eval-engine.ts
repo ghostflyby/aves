@@ -32,15 +32,17 @@ const esbuildWasm = esbuildWasmCjs as unknown as {
  * fetch (a compiled WebAssembly.Module is instantiated directly against
  * esbuild's own Go import object).
  *
- * The wasm payload cannot be loaded as an ESM module: it is Go-compiled and
- * its import section references the `gojs` namespace, which Deno's wasm module
- * integration (like Node's) tries to resolve as a module specifier and fails.
- * It is therefore read as bytes from the package directory (async read, then
- * WebAssembly.compile — async compilation off the main thread), and the
- * package directory itself is located via the `npm:` scheme — resolved from
- * Aves' npm dependency metadata, so it works in any import-map context (e.g.
- * JSR consumers) where a runtime bare-specifier resolve would fail. Loading is
- * lazy: the ~10 MB wasm compiles only on the first transform.
+ * The wasm payload is loaded as a raw module import — `import(
+ * "esbuild-wasm/esbuild.wasm", { with: { type: "bytes" } })` — which resolves
+ * from Aves' npm dependency metadata at build time, so no runtime specifier or
+ * package-directory path is exposed to the host. It cannot be loaded as an ESM
+ * module: the Go-compiled binary's import section references the `gojs`
+ * namespace, which Deno's wasm module integration (like Node's) tries to
+ * resolve as a module specifier and fails. Raw imports require
+ * `--unstable-raw-imports` (or `"unstable": ["raw-imports"]` in deno.json);
+ * that flag does not propagate to consumers of the SDK, so the REPL child
+ * process enables it explicitly in spawn args. Loading is lazy: the ~10 MB
+ * wasm compiles only on the first transform.
  *
  * esbuild-wasm's initialize() may only run once per process, so the resolved
  * transform is memoised at module scope — all engines in a process share the
@@ -48,22 +50,16 @@ const esbuildWasm = esbuildWasmCjs as unknown as {
  */
 let transformPromise: Promise<CodeTransform> | null = null;
 
-/**
- * Directory of the esbuild-wasm package, resolved from the `npm:` scheme
- * rather than a bare specifier so it works in any import-map context. Package
- * version is pinned in deno.json.
- */
-export function esbuildWasmDir(): URL {
-  return new URL(".", import.meta.resolve("npm:esbuild-wasm/esbuild.wasm"));
-}
-
 function getTransform(): Promise<CodeTransform> {
   if (!transformPromise) {
     transformPromise = (async () => {
-      const wasmBytes = await Deno.readFile(
-        new URL("esbuild.wasm", esbuildWasmDir()),
+      const { default: wasmBytes } = await import(
+        "esbuild-wasm/esbuild.wasm",
+        { with: { type: "bytes" } }
       );
-      const wasmModule = await WebAssembly.compile(wasmBytes);
+      const wasmModule = await WebAssembly.compile(
+        wasmBytes as unknown as Uint8Array<ArrayBuffer>,
+      );
       await esbuildWasm.initialize({ wasmModule, worker: false });
       return esbuildWasm.transform;
     })();

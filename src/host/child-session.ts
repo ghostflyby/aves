@@ -17,7 +17,6 @@ import {
 } from "../broker.ts";
 import { globalAbort, resolveModuleSpecifier } from "../runner.ts";
 import { createRunBrokerPolicy, type RunElicitContext } from "./policy.ts";
-import { esbuildWasmDir } from "../repl/eval-engine.ts";
 import type { Permissions } from "../types.ts";
 import type { SandboxState } from "../sandbox-state.ts";
 
@@ -369,13 +368,18 @@ export async function spawnReplSession(
   const extraDirs = [realCwd];
   if (permissions.read) extraDirs.push(...permissions.read);
   if (permissions.write) extraDirs.push(...permissions.write);
-  // esbuild-wasm runs fully in-process (lib/browser.js, worker:false), but it
-  // reads the package's esbuild.wasm payload once at first transform. Pre-allow
-  // that one read so REPL startup never fires broker elicitation — this replaces
-  // the native esbuild binary path pre-approval that the run-spawning backend
-  // required.
+  // esbuild-wasm runs fully in-process (lib/browser.js, worker:false), but the
+  // engine loads the package's esbuild.wasm as a raw module import at first
+  // transform — a build-time specifier, but the payload read still needs read
+  // access to the npm cache. Pre-allow that directory so REPL startup never
+  // fires broker elicitation — this replaces the native esbuild binary path
+  // pre-approval that the run-spawning backend required.
   try {
-    extraDirs.push(fileURLToPath(esbuildWasmDir()));
+    extraDirs.push(
+      fileURLToPath(
+        new URL(".", import.meta.resolve("npm:esbuild-wasm/esbuild.wasm")),
+      ),
+    );
   } catch { /* keep going if resolution fails */ }
 
   const ctx: RunElicitContext = {
@@ -402,6 +406,10 @@ export async function spawnReplSession(
   const args = [
     "run",
     "--no-prompt",
+    // Raw imports (wasm bytes) for the esbuild-wasm payload — the SDK's
+    // default transform backend loads esbuild.wasm with a type: "bytes"
+    // import; the flag does not propagate from a dependency's deno.json.
+    "--unstable-raw-imports",
     "--allow-import=" + DEFAULT_IMPORT_DOMAINS.join(","),
     BOOT_SPECIFIER,
   ];
