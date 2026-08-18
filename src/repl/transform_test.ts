@@ -1,7 +1,6 @@
 import { assertEquals, assertStringIncludes } from "@std/assert";
 import { rewriteReferences, transform } from "./transform.ts";
 import { replManager } from "../host/manager.ts";
-import { esbuildWasmDir } from "./eval-engine.ts";
 
 // ============================================================
 // Part 1: transform() tests (pure functions)
@@ -243,9 +242,11 @@ Deno.test("rewriteRef - $aves$scope.x computed property is rewritten", () => {
 
 const BOOT_PATH = new URL("../host/boot.ts", import.meta.url).pathname;
 const PROJECT_DIR = new URL("..", import.meta.url).pathname;
-// esbuild-wasm reads its esbuild.wasm payload from the package directory at
-// first transform; grant the child that one read explicitly.
-const WASM_DIR = esbuildWasmDir().pathname;
+// The default transform backend loads esbuild.wasm as a raw module import
+// from the package directory at first transform; grant the child read access
+// to that directory and enable the unstable raw-imports feature.
+const WASM_DIR =
+  new URL(".", import.meta.resolve("npm:esbuild-wasm/esbuild.wasm")).pathname;
 
 async function bootEval(
   inputs: string[],
@@ -254,6 +255,7 @@ async function bootEval(
     args: [
       "run",
       "--no-prompt",
+      "--unstable-raw-imports",
       "--allow-env",
       "--allow-read=.," + PROJECT_DIR + "," + WASM_DIR,
       "--allow-import=deno.land:443,jsr.io:443,esm.sh:443,raw.esm.sh:443,cdn.jsdelivr.net:443,raw.githubusercontent.com:443,gist.githubusercontent.com:443,registry.npmjs.org:443",
